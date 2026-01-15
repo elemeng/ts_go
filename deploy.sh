@@ -1,408 +1,499 @@
 #!/bin/bash
-# CryoET Tilt Series Viewer - 一键部署脚本
-# 用于启动、停止、重启前后端服务
+# CryoET Tilt Series Viewer - Smart Service Orchestration
+# Production-ready with intelligent start/stop/restart behavior
 
-set -e
+set -euo pipefail
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ==================== CONFIGURATION ====================
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m'
 
-# 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$PROJECT_ROOT"
+# Project structure
+readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly FRONTEND_DIR="$PROJECT_ROOT/frontend"
+readonly BACKEND_DIR="$PROJECT_ROOT/backend"
+readonly LOGS_DIR="$PROJECT_ROOT/logs"
 
-# PID 文件
-FRONTEND_PID_FILE="$PROJECT_ROOT/.frontend.pid"
-BACKEND_PID_FILE="$PROJECT_ROOT/.backend.pid"
+# Service configuration
+readonly FRONTEND_PORT=${FRONTEND_PORT:-5173}
+readonly BACKEND_PORT=${BACKEND_PORT:-8000}
+readonly FRONTEND_HOST=${FRONTEND_HOST:-localhost}
+readonly BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 
-# 日志文件
-FRONTEND_LOG="$PROJECT_ROOT/.frontend.log"
-BACKEND_LOG="$PROJECT_ROOT/.backend.log"
+# Runtime files
+readonly FRONTEND_PID_FILE="$PROJECT_ROOT/.frontend.pid"
+readonly BACKEND_PID_FILE="$PROJECT_ROOT/.backend.pid"
+readonly FRONTEND_LOG="$LOGS_DIR/frontend.log"
+readonly BACKEND_LOG="$LOGS_DIR/backend.log"
 
-# 端口
-FRONTEND_PORT=5173
-BACKEND_PORT=8000
-
-# 打印带颜色的信息
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+# ==================== LOGGING & UTILITIES ====================
+log() {
+    local level=$1; shift
+    local color=$NC
+    case "$level" in
+        INFO)  color=$BLUE ;;
+        SUCCESS) color=$GREEN ;;
+        WARN)  color=$YELLOW ;;
+        ERROR) color=$RED ;;
+    esac
+    printf "${color}[%s]${NC} %s - %s\n" "$level" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+info()    { log INFO "$@"; }
+success() { log SUCCESS "$@"; }
+warn()    { log WARN "$@"; }
+error()   { log ERROR "$@"; }
+
+require_command() {
+    command -v "$1" &>/dev/null || { error "Required command not found: $1"; exit 1; }
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+# ==================== PROCESS MANAGEMENT ====================
+get_pid_from_file() {
+    [ -f "$1" ] && cat "$1" 2>/dev/null || echo ""
 }
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+is_process_alive() {
+    [ -n "$1" ] && ps -p "$1" &>/dev/null
 }
 
-# 检查进程是否运行
-is_process_running() {
-    local pid_file=$1
-    if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file")
-        if ps -p "$pid" > /dev/null 2>&1; then
+is_port_listening() {
+    lsof -ti :"$1" -sTCP:LISTEN &>/dev/null
+}
+
+cleanup_stale_pid() {
+    local pid=$(get_pid_from_file "$1")
+    if [ -n "$pid" ] && ! is_process_alive "$pid"; then
+        warn "Removing stale PID file for $2 (PID: $pid)"
+        rm -f "$1"
+    fi
+}
+
+cleanup_all_stale_pids() {
+    cleanup_stale_pid "$FRONTEND_PID_FILE" "frontend"
+    cleanup_stale_pid "$BACKEND_PID_FILE" "backend"
+}
+
+# ==================== SMART SERVICE CHECKS ====================
+is_service_running() {
+    local service=$1
+    local pid_file=$2
+    local port=$3
+    
+    local pid=$(get_pid_from_file "$pid_file")
+    if [ -n "$pid" ] && is_process_alive "$pid"; then
+        if is_port_listening "$port"; then
             return 0
         else
-            rm -f "$pid_file"
+            warn "$service process exists but port $port is not listening"
             return 1
         fi
     fi
     return 1
 }
 
-# 检查端口是否被占用
-is_port_in_use() {
-    local port=$1
-    if lsof -Pi :"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+ensure_directories() {
+    mkdir -p "$LOGS_DIR"
+}
+
+# ==================== BACKEND ENVIRONMENT SETUP ====================
+ensure_backend_environment() {
+    info "Ensuring backend environment..."
+    
+    # Ensure uv is installed in user environment
+    if ! command -v uv &>/dev/null; then
+        info "Installing uv package manager..."
+        pip install uv
+    fi
+    
+    # Sync dependencies if needed (missing flag or pyproject newer)
+    uv sync 
+}
+
+# ==================== SMART SERVICE CONTROL ====================
+start_frontend() {
+    # Idempotent check
+    if is_service_running "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"; then
+        local pid=$(get_pid_from_file "$FRONTEND_PID_FILE")
+        success "Frontend already running (PID: $pid)"
+        info "  → http://${FRONTEND_HOST}:${FRONTEND_PORT}"
         return 0
     fi
-    return 1
-}
-
-# 停止前端服务
-stop_frontend() {
-    print_info "停止前端服务..."
     
-    if is_process_running "$FRONTEND_PID_FILE"; then
-        local pid=$(cat "$FRONTEND_PID_FILE")
-        kill "$pid"
-        wait "$pid" 2>/dev/null || true
-        rm -f "$FRONTEND_PID_FILE"
-        print_success "前端服务已停止 (PID: $pid)"
-    else
-        print_warning "前端服务未运行"
-    fi
-}
-
-# 停止后端服务
-stop_backend() {
-    print_info "停止后端服务..."
+    info "Starting frontend..."
+    cleanup_stale_pid "$FRONTEND_PID_FILE" "frontend"
     
-    if is_process_running "$BACKEND_PID_FILE"; then
-        local pid=$(cat "$BACKEND_PID_FILE")
-        kill "$pid"
-        wait "$pid" 2>/dev/null || true
-        rm -f "$BACKEND_PID_FILE"
-        print_success "后端服务已停止 (PID: $pid)"
-    else
-        print_warning "后端服务未运行"
-    fi
-}
-
-# 停止所有服务
-stop_all() {
-    print_info "停止所有服务..."
-    stop_frontend
-    stop_backend
-    print_success "所有服务已停止"
-}
-
-# 启动前端服务
-start_frontend() {
-    print_info "启动前端服务..."
-    
-    # 检查端口
-    if is_port_in_use "$FRONTEND_PORT"; then
-        print_error "前端端口 $FRONTEND_PORT 已被占用"
-        return 1
+    if is_port_listening "$FRONTEND_PORT"; then
+        error "Frontend port $FRONTEND_PORT is in use by another process"
+        exit 1
     fi
     
-    # 检查依赖
-    if [ ! -d "node_modules" ]; then
-        print_info "安装前端依赖..."
-        bun install
+    # Install dependencies if needed
+    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+        info "Installing frontend dependencies..."
+        cd "$FRONTEND_DIR"
+        bun install --frozen-lockfile 2>/dev/null || npm ci
+        cd - >/dev/null
     fi
     
-    # 启动前端
+    ensure_directories
+    cd "$FRONTEND_DIR"
     nohup bun run dev > "$FRONTEND_LOG" 2>&1 &
     local pid=$!
+    cd - >/dev/null
+    
+    # Verify process started
+    sleep 1
+    if ! is_process_alive "$pid"; then
+        error "Frontend process died immediately"
+        tail -n 20 "$FRONTEND_LOG" >&2
+        exit 1
+    fi
+    
     echo "$pid" > "$FRONTEND_PID_FILE"
     
-    # 等待启动
-    sleep 3
+    # Wait for port
+    for i in {1..15}; do
+        if is_port_listening "$FRONTEND_PORT"; then
+            success "Frontend started (PID: $pid)"
+            info "  → http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+            info "  → Log: $FRONTEND_LOG"
+            return 0
+        fi
+        sleep 1
+        [ $(( i % 5 )) -eq 0 ] && info "Waiting for frontend... ($i/15 seconds)"
+    done
     
-    if is_process_running "$FRONTEND_PID_FILE"; then
-        print_success "前端服务已启动 (PID: $pid)"
-        print_info "访问地址: http://localhost:$FRONTEND_PORT"
-        print_info "日志文件: $FRONTEND_LOG"
-    else
-        print_error "前端服务启动失败"
-        cat "$FRONTEND_LOG"
-        return 1
-    fi
+    error "Frontend failed to start within timeout"
+    tail -n 30 "$FRONTEND_LOG" >&2
+    exit 1
 }
 
-# 启动后端服务
 start_backend() {
-    print_info "启动后端服务..."
-    
-    # 检查端口
-    if is_port_in_use "$BACKEND_PORT"; then
-        print_error "后端端口 $BACKEND_PORT 已被占用"
-        return 1
+    # Idempotent check
+    if is_service_running "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"; then
+        local pid=$(get_pid_from_file "$BACKEND_PID_FILE")
+        success "Backend already running (PID: $pid)"
+        info "  → API: http://${BACKEND_HOST}:${BACKEND_PORT}"
+        return 0
     fi
     
-    # 检查 Python 环境
-    if ! command -v python3 &> /dev/null; then
-        print_error "未找到 Python 3"
-        return 1
+    info "Starting backend..."
+    cleanup_stale_pid "$BACKEND_PID_FILE" "backend"
+    
+    if is_port_listening "$BACKEND_PORT"; then
+        error "Backend port $BACKEND_PORT is in use by another process"
+        exit 1
     fi
     
-    # 检查虚拟环境
-    if [ ! -d ".venv" ]; then
-        print_info "创建 Python 虚拟环境..."
-        python3 -m venv .venv
-    fi
+    ensure_backend_environment
     
-    # 激活虚拟环境并安装依赖
-    print_info "检查后端依赖..."
-    source .venv/bin/activate
-    
-    if ! command -v uvicorn &> /dev/null; then
-        print_info "安装后端依赖..."
-        pip install -e backend/
-    fi
-    
-    # 启动后端（从 backend 目录运行）
-    cd backend
-    nohup uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "../backend.log" 2>&1 &
+    # Activate venv and start service
+    source "$BACKEND_DIR/.venv/bin/activate"
+    cd "$BACKEND_DIR"
+    nohup uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload > "$BACKEND_LOG" 2>&1 &
     local pid=$!
-    echo "$pid" > "../backend.pid"
-    cd ..
-    mv backend.pid "$BACKEND_PID_FILE"
-    mv backend.log "$BACKEND_LOG"
+    cd - >/dev/null
     
-    # 等待启动
-    sleep 3
+    # Verify process started
+    sleep 1
+    if ! is_process_alive "$pid"; then
+        error "Backend process died immediately"
+        tail -n 30 "$BACKEND_LOG" >&2
+        exit 1
+    fi
     
-    if is_process_running "$BACKEND_PID_FILE"; then
-        print_success "后端服务已启动 (PID: $pid)"
-        print_info "API 地址: http://localhost:$BACKEND_PORT"
-        print_info "API 文档: http://localhost:$BACKEND_PORT/docs"
-        print_info "日志文件: $BACKEND_LOG"
+    echo "$pid" > "$BACKEND_PID_FILE"
+    
+    # Wait for port
+    for i in {1..20}; do
+        if is_port_listening "$BACKEND_PORT"; then
+            success "Backend started (PID: $pid)"
+            info "  → API: http://${BACKEND_HOST}:${BACKEND_PORT}"
+            info "  → Docs: http://${BACKEND_HOST}:${BACKEND_PORT}/docs"
+            info "  → Log: $BACKEND_LOG"
+            return 0
+        fi
+        sleep 1
+        [ $(( i % 5 )) -eq 0 ] && info "Waiting for backend... ($i/20 seconds)"
+    done
+    
+    error "Backend failed to start within timeout"
+    tail -n 30 "$BACKEND_LOG" >&2
+    exit 1
+}
+
+start_all() {
+    info "Starting all services..."
+    ensure_directories
+    
+    # Start only if not running
+    local started=0
+    
+    if ! is_service_running "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"; then
+        start_backend
+        started=1
+        sleep 1
+    fi
+    
+    if ! is_service_running "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"; then
+        start_frontend
+        started=1
+    fi
+    
+    if [ $started -eq 0 ]; then
+        info "All services already running"
     else
-        print_error "后端服务启动失败"
-        cat "$BACKEND_LOG"
+        success "All services started"
+    fi
+}
+
+stop_service() {
+    local service=$1
+    local pid_file=$2
+    local port=$3
+    
+    info "Stopping $service..."
+    local pid=$(get_pid_from_file "$pid_file")
+    local killed=0
+    
+    if [ -n "$pid" ] && is_process_alive "$pid"; then
+        kill "$pid" 2>/dev/null || true
+        
+        for i in {1..20}; do
+            if ! is_process_alive "$pid"; then
+                success "$service stopped gracefully (PID: $pid)"
+                killed=1
+                break
+            fi
+            sleep 0.5
+        done
+        
+        if [ $killed -eq 0 ]; then
+            warn "$service did not stop gracefully, force killing..."
+            kill -KILL "$pid" 2>/dev/null || true
+            sleep 1
+            success "$service forcefully stopped (PID: $pid)"
+            killed=1
+        fi
+    fi
+    
+    rm -f "$pid_file"
+    
+    if [ $killed -eq 0 ]; then
+        warn "$service was not running"
         return 1
     fi
-}
-
-# 启动所有服务
-start_all() {
-    print_info "启动所有服务..."
-    start_backend
-    start_frontend
-    print_success "所有服务已启动"
-}
-
-# 重启前端
-restart_frontend() {
-    print_info "重启前端服务..."
-    stop_frontend
-    sleep 1
-    start_frontend
-}
-
-# 重启后端
-restart_backend() {
-    print_info "重启后端服务..."
-    stop_backend
-    sleep 1
-    start_backend
-}
-
-# 重启所有服务
-restart_all() {
-    print_info "重启所有服务..."
-    stop_all
-    sleep 2
-    start_all
-}
-
-# 查看状态
-status() {
-    print_info "服务状态:"
-    echo ""
     
-    # 前端状态
-    if is_process_running "$FRONTEND_PID_FILE"; then
-        local pid=$(cat "$FRONTEND_PID_FILE")
-        print_success "前端服务: 运行中 (PID: $pid)"
-        if is_port_in_use "$FRONTEND_PORT"; then
-            print_info "  地址: http://localhost:$FRONTEND_PORT"
-        fi
-    else
-        print_warning "前端服务: 未运行"
+    return 0
+}
+
+stop_all() {
+    info "Stopping all services..."
+    local stopped=0
+    
+    if is_service_running "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"; then
+        stop_service "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"
+        stopped=1
+        sleep 2
     fi
     
-    # 后端状态
-    if is_process_running "$BACKEND_PID_FILE"; then
-        local pid=$(cat "$BACKEND_PID_FILE")
-        print_success "后端服务: 运行中 (PID: $pid)"
-        if is_port_in_use "$BACKEND_PORT"; then
-            print_info "  地址: http://localhost:$BACKEND_PORT"
-            print_info "  文档: http://localhost:$BACKEND_PORT/docs"
-        fi
-    else
-        print_warning "后端服务: 未运行"
+    if is_service_running "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"; then
+        stop_service "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"
+        stopped=1
+        sleep 1
     fi
     
-    echo ""
+    if [ $stopped -eq 0 ]; then
+        warn "No services were running"
+    else
+        success "All services stopped"
+    fi
 }
 
-# 查看日志
-logs() {
+restart_service() {
     local service=$1
     
-    case $service in
-        frontend|front|f)
-            if [ -f "$FRONTEND_LOG" ]; then
-                tail -f "$FRONTEND_LOG"
+    case "$service" in
+        frontend)
+            if is_service_running "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"; then
+                info "Restarting frontend..."
+                stop_service "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT"
+                sleep 1
             else
-                print_error "前端日志文件不存在"
+                warn "Frontend is not running, starting instead..."
             fi
+            start_frontend
             ;;
-        backend|back|b)
-            if [ -f "$BACKEND_LOG" ]; then
-                tail -f "$BACKEND_LOG"
+        backend)
+            if is_service_running "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"; then
+                info "Restarting backend..."
+                stop_service "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT"
+                sleep 2
             else
-                print_error "后端日志文件不存在"
+                warn "Backend is not running, starting instead..."
             fi
+            start_backend
             ;;
-        all|a)
-            print_info "显示所有日志 (Ctrl+C 退出)..."
-            tail -f "$FRONTEND_LOG" "$BACKEND_LOG"
-            ;;
-        *)
-            print_error "用法: $0 logs [frontend|backend|all]"
-            exit 1
+        all)
+            info "Restarting all services..."
+            # Smart restart: only stop what's running
+            local was_backend_running=$(is_service_running "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT" && echo "yes" || echo "no")
+            local was_frontend_running=$(is_service_running "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT" && echo "yes" || echo "no")
+            
+            [ "$was_backend_running" = "yes" ] && stop_service "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT" && sleep 2
+            [ "$was_frontend_running" = "yes" ] && stop_service "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT" && sleep 1
+            
+            start_all
             ;;
     esac
 }
 
-# 显示帮助
+view_logs() {
+    local service=$1
+    local lines=${2:-50}
+    
+    case "$service" in
+        frontend|f) tail -f -n "$lines" "$FRONTEND_LOG" ;;
+        backend|b)  tail -f -n "$lines" "$BACKEND_LOG" ;;
+        all)        tail -f -n "$lines" "$FRONTEND_LOG" "$BACKEND_LOG" ;;
+        *)          error "Unknown log target: $service"; exit 1 ;;
+    esac
+}
+
+show_status() {
+    info "Service Status Report"
+    echo "========================"
+    
+    local any_running=0
+    
+    # Frontend status
+    echo -n "Frontend: "
+    if [ -f "$FRONTEND_PID_FILE" ]; then
+        local pid=$(get_pid_from_file "$FRONTEND_PID_FILE")
+        if is_process_alive "$pid"; then
+            success "RUNNING (PID: $pid)"
+            echo "  Port: $FRONTEND_PORT"
+            echo "  Log: $FRONTEND_LOG"
+            any_running=1
+        else
+            warn "STALE PID (removing)"
+            rm -f "$FRONTEND_PID_FILE"
+        fi
+    else
+        warn "NOT RUNNING"
+        is_port_listening "$FRONTEND_PORT" && warn "  BUT PORT $FRONTEND_PORT IS LISTENING!"
+    fi
+    
+    # Backend status
+    echo -n "Backend: "
+    if [ -f "$BACKEND_PID_FILE" ]; then
+        local pid=$(get_pid_from_file "$BACKEND_PID_FILE")
+        if is_process_alive "$pid"; then
+            success "RUNNING (PID: $pid)"
+            echo "  Port: $BACKEND_PORT"
+            echo "  Log: $BACKEND_LOG"
+            any_running=1
+        else
+            warn "STALE PID (removing)"
+            rm -f "$BACKEND_PID_FILE"
+        fi
+    else
+        warn "NOT RUNNING"
+        is_port_listening "$BACKEND_PORT" && warn "  BUT PORT $BACKEND_PORT IS LISTENING!"
+    fi
+    
+    [ $any_running -eq 0 ] && { echo; warn "No services running"; }
+}
+
+# ==================== MAIN ====================
 show_help() {
     cat << EOF
-CryoET Tilt Series Viewer - 部署脚本
+CryoET Tilt Series Viewer - Smart Service Management
 
-用法: $0 [命令] [选项]
+Usage: $0 [COMMAND] [SERVICE] [OPTIONS]
 
-命令:
-    start [service]     启动服务
-                        service: frontend, backend, all (默认: all)
-    
-    stop [service]      停止服务
-                        service: frontend, backend, all (默认: all)
-    
-    restart [service]   重启服务
-                        service: frontend, backend, all (默认: all)
-    
-    status              查看服务状态
-    
-    logs [service]      查看服务日志
-                        service: frontend, backend, all
-    
-    help                显示帮助信息
+Commands:
+  start [frontend|backend|all]   Start services (idempotent)
+  stop [frontend|backend|all]    Stop services (only if running)
+  restart [frontend|backend|all] Smart restart (stop if running, then start)
+  status                         Show service status
+  logs [frontend|backend|all]    View logs
+  help                           Show this help
 
-示例:
-    $0 start            # 启动所有服务
-    $0 start frontend   # 仅启动前端
-    $0 stop backend     # 停止后端
-    $0 restart all      # 重启所有服务
-    $0 status           # 查看状态
-    $0 logs backend     # 查看后端日志
+Smart Features:
+  - start: Skips already-running services
+  - stop: Only acts on running services  
+  - restart: Starts if not running, restarts if running
+  - Dependencies auto-installed on first run
+  - Virtual environment auto-managed
 
+Examples:
+  $0 start              # Start all services (smart)
+  $0 restart backend    # Restart backend (or start if not running)
+  $0 stop all           # Stop all running services
+  $0 logs backend 100   # Show last 100 lines of backend log
+
+Environment:
+  FRONTEND_PORT, BACKEND_PORT - Set custom ports
 EOF
 }
 
-# 主函数
 main() {
-    local command=$1
-    local service=$2
+    [ $# -eq 0 ] && { show_help; exit 0; }
     
-    case $command in
+    local command=$1
+    shift || true
+    
+    # Cleanup stale PIDs for relevant commands
+    case "$command" in
+        start|restart|logs|status) cleanup_all_stale_pids ;;
+    esac
+    
+    case "$command" in
         start)
-            case $service in
-                frontend|front|f)
-                    start_frontend
-                    ;;
-                backend|back|b)
-                    start_backend
-                    ;;
-                all|a|"")
-                    start_all
-                    ;;
-                *)
-                    print_error "Unknown service: $service"
-                    show_help
-                    exit 1
-                    ;;
-            esac
-            ;;
+            local service=${1:-all}
+            case "$service" in
+                frontend|f) start_frontend ;;
+                backend|b)  start_backend ;;
+                all)        start_all ;;
+                *)          error "Unknown service: $service"; show_help; exit 1 ;;
+            esac ;;
+            
         stop)
-            case $service in
-                frontend|front|f)
-                    stop_frontend
-                    ;;
-                backend|back|b)
-                    stop_backend
-                    ;;
-                all|a|"")
-                    stop_all
-                    ;;
-                *)
-                    print_error "Unknown service: $service"
-                    show_help
-                    exit 1
-                    ;;
-            esac
-            ;;
+            local service=${1:-all}
+            case "$service" in
+                frontend|f) stop_service "frontend" "$FRONTEND_PID_FILE" "$FRONTEND_PORT" ;;
+                backend|b)  stop_service "backend" "$BACKEND_PID_FILE" "$BACKEND_PORT" ;;
+                all)        stop_all ;;
+                *)          error "Unknown service: $service"; show_help; exit 1 ;;
+            esac ;;
+            
         restart)
-            case $service in
-                frontend|front|f)
-                    restart_frontend
-                    ;;
-                backend|back|b)
-                    restart_backend
-                    ;;
-                all|a|"")
-                    restart_all
-                    ;;
-                *)
-                    print_error "Unknown service: $service"
-                    show_help
-                    exit 1
-                    ;;
-            esac
-            ;;
+            local service=${1:-all}
+            restart_service "$service" ;;
+            
         status)
-            status
-            ;;
+            show_status ;;
+            
         logs)
-            logs "$service"
-            ;;
+            local service=${1:-all}
+            local lines=${2:-50}
+            view_logs "$service" "$lines" ;;
+            
         help|--help|-h)
-            show_help
-            ;;
-        "")
-            show_help
-            ;;
+            show_help ;;
+            
         *)
-            print_error "Unknown command: $command"
+            error "Unknown command: $command"
             show_help
-            exit 1
-            ;;
+            exit 1 ;;
     esac
 }
 
-# Run main function
+# Execute main
+trap 'log WARN "Interrupted"; exit 130' INT TERM
 main "$@"
