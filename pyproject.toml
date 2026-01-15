@@ -1,0 +1,18 @@
+[project]
+name = "ts-sv-backend"
+version = "0.0.1"
+description = "CryoET Tilt Series API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.128.0",
+    "mdocfile>=0.2.2",
+    "mrcfile>=1.5.4",
+    "numpy>=2.4.1",
+    "pillow>=12.1.0",
+    "pydantic>=2.12.5",
+    "uvicorn>=0.40.0",
+]
+
+
+[dependency-groups]
+dev = ["ruff>=0.14.11"]

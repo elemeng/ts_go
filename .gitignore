@@ -1,0 +1,90 @@
+# Test results
+test-results
+
+# Node.js / Frontend
+node_modules
+bun.lock
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Test data
+/test
+/test.tar
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Ruff
+.ruff_cache/
+.ruff_cache/
+
+# Log files
+*.log
+.backend.log
+.frontend.log
+
+# PID files
+*.pid
+.backend.pid
+.frontend.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude AI
+.claude/
+
+# Python version (optional - uncomment if you want to ignore it)
+# .python-version

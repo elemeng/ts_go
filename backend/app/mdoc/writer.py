@@ -1,0 +1,110 @@
+from pathlib import Path
+from typing import Dict
+from fastapi import HTTPException
+
+
+def write_mdoc_with_selections(
+	mdoc_path: str,
+	selections: Dict[int, bool],
+	backup_path: str | None = None
+) -> str:
+	"""
+	Write mdoc file with frame selections - FIXED VERSION
+
+	Frames that are not selected are removed from the file, and ZValues are
+	reassigned sequentially for kept frames.
+
+	Args:
+		mdoc_path: Path to mdoc file
+		selections: Dictionary mapping original zIndex -> selected state
+		backup_path: Optional path for backup file
+
+	Returns:
+		Path to backup file (if created)
+
+	Raises:
+		HTTPException: If file operations fail
+	"""
+	mdoc_path = Path(mdoc_path)
+	if not mdoc_path.exists():
+		raise HTTPException(status_code=404, detail=f"mdoc file not found: {mdoc_path}")
+
+	# Create backup
+	backup = None
+	if backup_path:
+		backup = Path(backup_path)
+	else:
+		backup = mdoc_path.with_suffix('.mdoc.bak')
+
+	import shutil
+	shutil.copy2(mdoc_path, backup)
+
+	try:
+		# Read and modify mdoc
+		with open(mdoc_path, 'r') as f:
+			lines = f.readlines()
+
+		modified_lines = []
+		output_z_index = 0  # This tracks the ZValue for kept frames only
+		current_frame_z = None  # This tracks the original ZValue we're processing
+		in_frame_section = False
+		skip_frame = False
+		frame_buffer = []  # Buffer to hold current frame lines
+		header_lines = []  # Store header lines before first frame
+
+		for line in lines:
+			stripped = line.strip()
+
+			# Store header lines (before first frame)
+			if current_frame_z is None and not stripped.startswith('[ZValue'):
+				header_lines.append(line)
+				continue
+
+			# Start of a new frame section
+			if stripped.startswith('[ZValue'):
+				# Process previous frame if any
+				if current_frame_z is not None and not skip_frame:
+					# Write out the kept frame with correct ZValue
+					modified_lines.append(f"[ZValue = {output_z_index}]\n")
+					# Add the rest of the frame lines (excluding the original ZValue line)
+					for buf_line in frame_buffer[1:]:  # Skip original ZValue line
+						modified_lines.append(buf_line)
+					output_z_index += 1
+
+				# Parse the original Z value
+				try:
+					current_frame_z = int(stripped.split('=')[1].split(']')[0].strip())
+				except (IndexError, ValueError):
+					current_frame_z = None
+					skip_frame = True
+					continue
+
+				# Check if this frame should be kept
+				selected = selections.get(current_frame_z, True)
+				skip_frame = not selected
+
+				# Reset frame buffer for new frame
+				frame_buffer = [line]  # Store the original ZValue line as first item
+				in_frame_section = True
+
+			elif in_frame_section:
+				# Collect all lines for this frame
+				frame_buffer.append(line)
+
+		# Process the last frame
+		if current_frame_z is not None and not skip_frame:
+			modified_lines.append(f"[ZValue = {output_z_index}]\n")
+			for buf_line in frame_buffer[1:]:
+				modified_lines.append(buf_line)
+
+		# Combine header and modified frames
+		final_lines = header_lines + modified_lines
+
+		# Write modified mdoc
+		with open(mdoc_path, 'w') as f:
+			f.writelines(final_lines)
+
+		return str(backup)
+
+	except Exception as e:
+		raise HTTPException(status_code=409, detail=f"Failed to write mdoc: {str(e)}")
