@@ -4,20 +4,20 @@ from app.api import mdoc, preview, project, ts, frame, files
 
 app = FastAPI(
 	title="TS-SV Backend API",
-	description="CryoET Tilt Series 筛选与检查系统 - 后端 API",
+	description="CryoET Tilt Series Filtering and Inspection System - Backend API",
 	version="0.0.1",
 )
 
-# CORS 配置
+# CORS configuration
 app.add_middleware(
 	CORSMiddleware,
-	allow_origins=["*"],  # 生产环境应该限制具体域名
+	allow_origins=["*"],  # Should restrict to specific domains in production
 	allow_credentials=True,
 	allow_methods=["*"],
 	allow_headers=["*"],
 )
 
-# 注册路由
+# Register routes
 app.include_router(mdoc.router, prefix="/api/mdoc", tags=["mdoc"])
 app.include_router(preview.router, prefix="/api/preview", tags=["preview"])
 app.include_router(project.router, prefix="/api/project", tags=["project"])

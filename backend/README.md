@@ -1,34 +1,34 @@
 # TS-SV Backend
 
-CryoET Tilt Series 筛选与检查系统 - 后端 API
+CryoET Tilt Series Filtering and Inspection System - Backend API
 
-## 安装
+## Installation
 
 ```bash
 cd backend
 pip install -e .
 ```
 
-## 开发依赖
+## Development Dependencies
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-## 运行
+## Running
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## API 文档
+## API Documentation
 
-启动服务后访问：
+After starting the service, visit:
 
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-## 测试
+## Testing
 
 ```bash
 pytest

@@ -105,7 +105,7 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
             return result
 
         finally:
-            # 清理任务记录
+            # Cleanup task record
             with _inflight_lock:
                 if task_key in _inflight_tasks:
                     del _inflight_tasks[task_key]

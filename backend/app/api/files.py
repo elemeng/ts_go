@@ -65,8 +65,8 @@ async def validate_path(path: str):
     try:
         dir_path = Path(path).resolve()
 
-        # 注意：已移除安全检查，允许访问任意目录
-        # 生产环境请根据需要重新添加安全检查
+        # Note: Security checks removed, allowing access to any directory
+        # Please add security checks as needed for production
 
         if not dir_path.exists():
             return {"valid": False, "reason": "Path does not exist"}

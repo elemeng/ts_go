@@ -342,7 +342,7 @@ main() {
                     start_all
                     ;;
                 *)
-                    print_error "未知服务: $service"
+                    print_error "Unknown service: $service"
                     show_help
                     exit 1
                     ;;
@@ -360,7 +360,7 @@ main() {
                     stop_all
                     ;;
                 *)
-                    print_error "未知服务: $service"
+                    print_error "Unknown service: $service"
                     show_help
                     exit 1
                     ;;
@@ -378,7 +378,7 @@ main() {
                     restart_all
                     ;;
                 *)
-                    print_error "未知服务: $service"
+                    print_error "Unknown service: $service"
                     show_help
                     exit 1
                     ;;
@@ -397,12 +397,12 @@ main() {
             show_help
             ;;
         *)
-            print_error "未知命令: $command"
+            print_error "Unknown command: $command"
             show_help
             exit 1
             ;;
     esac
 }
 
-# 运行主函数
+# Run main function
 main "$@"
