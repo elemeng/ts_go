@@ -11,8 +11,15 @@ def write_mdoc_with_selections(
 	"""
 	Write mdoc file with frame selections - FIXED VERSION
 
-	Frames that are not selected are removed from the file, and ZValues are
-	reassigned sequentially for kept frames.
+	Frames that are not selected are removed from the file.
+	ZValues are preserved as immutable identifiers (not reassigned).
+
+	IMPORTANT DATA CONSISTENCY:
+	- ZValue serves as the immutable primary key for each frame
+	- ZValue must NEVER be modified or reassigned
+	- ZValue maps 1:1 with frame metadata (angle, mrcPath, etc.)
+	- When frames are deleted, remaining frames keep their original ZValues
+	- This ensures frontend-backend consistency across save/rescan cycles
 
 	Args:
 		mdoc_path: Path to mdoc file
@@ -47,7 +54,6 @@ def write_mdoc_with_selections(
 			lines = f.readlines()
 
 		modified_lines = []
-		output_z_index = 0  # This tracks the ZValue for kept frames only
 		current_frame_z = None  # This tracks the original ZValue we're processing
 		in_frame_section = False
 		skip_frame = False
@@ -66,12 +72,10 @@ def write_mdoc_with_selections(
 			if stripped.startswith('[ZValue'):
 				# Process previous frame if any
 				if current_frame_z is not None and not skip_frame:
-					# Write out the kept frame with correct ZValue
-					modified_lines.append(f"[ZValue = {output_z_index}]\n")
-					# Add the rest of the frame lines (excluding the original ZValue line)
-					for buf_line in frame_buffer[1:]:  # Skip original ZValue line
-						modified_lines.append(buf_line)
-					output_z_index += 1
+					# Write out the kept frame with ORIGINAL ZValue (immutable)
+					# CRITICAL: We preserve the entire frame_buffer including original ZValue line
+					# This ensures ZValue never changes, maintaining data consistency
+					modified_lines.extend(frame_buffer)
 
 				# Parse the original Z value
 				try:
@@ -95,9 +99,8 @@ def write_mdoc_with_selections(
 
 		# Process the last frame
 		if current_frame_z is not None and not skip_frame:
-			modified_lines.append(f"[ZValue = {output_z_index}]\n")
-			for buf_line in frame_buffer[1:]:
-				modified_lines.append(buf_line)
+			# Write out the kept frame with ORIGINAL ZValue (immutable)
+			modified_lines.extend(frame_buffer)
 
 		# Combine header and modified frames
 		final_lines = header_lines + modified_lines
