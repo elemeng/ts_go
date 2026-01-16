@@ -126,8 +126,19 @@ update_env_file() {
     # If BACKEND_HOST is 0.0.0.0, we need to get the actual IP address
     local api_host="$BACKEND_HOST"
     if [ "$BACKEND_HOST" = "0.0.0.0" ]; then
-        # Try to get the primary IP address
-        api_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+        # Try to get the primary IP address by filtering out localhost and loopback
+        # Use ip route to get the default gateway interface, then get its IP
+        if command -v ip &>/dev/null; then
+            local default_interface=$(ip route | grep default | awk '{print $5}' | head -1)
+            if [ -n "$default_interface" ]; then
+                api_host=$(ip addr show "$default_interface" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
+            fi
+        fi
+
+        # Fallback to hostname -I if ip command failed
+        if [ -z "$api_host" ] || [ "$api_host" = "0.0.0.0" ]; then
+            api_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+        fi
     fi
 
     # Update or create .env file with the backend URL
