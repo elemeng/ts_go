@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import { userHome, getUserHome } from '$lib/store';
 
 	interface FileEntry {
 		name: string;
@@ -23,7 +24,8 @@
 	// 获取用户 home 目录
 	let getDefaultPath = () => {
 		if (initialPath) return initialPath;
-		return '/home/meng';
+		// Get user home directory from store
+		return $userHome || getUserHome();
 	};
 
 	let currentPath = $state(getDefaultPath());
@@ -42,7 +44,8 @@
 		error = null;
 
 		try {
-			const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+			// API base from .env file
+			const apiBase = import.meta.env.VITE_API_BASE;
 			const response = await fetch(`${apiBase}/api/files/list?path=${encodeURIComponent(path)}`);
 			if (!response.ok) {
 				throw new Error(`Failed to load directory: ${response.statusText}`);

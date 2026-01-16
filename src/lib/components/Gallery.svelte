@@ -15,15 +15,17 @@
 		getPng,
 		cacheWarning,
 		scanProject,
-		loadPersistedTiltSeries
+		loadPersistedTiltSeries,
+		userHome,
+		fetchUserHome
 	} from '$lib/store';
 	import { toastStore } from '$lib/stores/toastStore';
 	import type { TiltSeries, Frame } from '$lib/types';
 	import FileBrowser from './FileBrowser.svelte';
 
-	let expandedTs = $state<Set<string>>(new Set());
-	let visibleFrames = $state<Set<string>>(new Set());
-	let loadedPngFrames = $state<Set<string>>(new Set()); // Track frames with loaded real PNGs
+	let expandedTs = $state(new Set<string>());
+	let visibleFrames = $state(new Set<string>());
+	let loadedPngFrames = $state(new Set<string>()); // Track frames with loaded real PNGs
 	let isSavingAll = $state(false);
 	let saveAllError = $state<string | null>(null);
 	let unsavedTsList = $state<TiltSeries[]>([]);
@@ -32,19 +34,20 @@
 		indexedDbExceeded: false,
 		evictionNeeded: false
 	});
-	let selectedTsIds = $state<Set<string>>(new Set()); // For batch operations
+	let selectedTsIds = $state(new Set<string>()); // For batch operations
 	let selectionsStore = $state<SelectionState>(new Map());
 	let thumbSize = $state(128); // 缩略图宽度（像素）
 
 	// Scan Project state
-	const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+	// API 基础 URL - from .env file
+	const API_BASE = import.meta.env.VITE_API_BASE;
+
 	let isScanning = $state(false);
 	let scanError = $state<string | null>(null);
 	let showScanDialog = $state(false);
 	let showFileBrowser = $state(false);
 	let fileBrowserTarget = $state<'mdoc' | 'image' | 'png' | 'config'>('mdoc');
 	let saveLoadMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
-	let userHome = $state('/home/meng');
 
 	// 扫描配置
 	let scanConfig = $state({
@@ -59,15 +62,15 @@
 
 	// Initialize scanConfig with userHome when available
 	$effect(() => {
-		if (userHome && !scanConfig.mdoc_dir) {
-			scanConfig.mdoc_dir = userHome;
-			scanConfig.image_dir = userHome;
-			scanConfig.png_dir = userHome;
+		if ($userHome && !scanConfig.mdoc_dir) {
+			scanConfig.mdoc_dir = $userHome;
+			scanConfig.image_dir = $userHome;
+			scanConfig.png_dir = $userHome;
 		}
 	});
 
 	// Config directory for storing saved configurations
-	let configDir = $derived(`${userHome}/.ts_sv`);
+	let configDir = $derived(`${$userHome}/.ts_sv`);
 
 	// 从 localStorage 加载 thumbSize
 	function loadThumbSize() {
@@ -405,8 +408,7 @@
 				} else {
 					// TS is NOT selected: backup and delete original
 					try {
-						const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-						const response = await fetch(`${apiBase}/api/mdoc/backup-delete`, {
+						const response = await fetch(`${API_BASE}/api/mdoc/backup-delete`, {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
 							body: JSON.stringify({ mdocPath: ts.mdocPath })
@@ -495,9 +497,8 @@
 				}
 
 				// 从后端加载
-				const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 				const response = await fetch(
-					`${apiBase}/api/preview/${params.tsId}/${params.zIndex}?bin=8&quality=90`
+					`${API_BASE}/api/preview/${params.tsId}/${params.zIndex}?bin=8&quality=90`
 				);
 				if (response.ok) {
 					const blob = await response.blob();
@@ -523,17 +524,7 @@
 	}
 
 	// Scan Project functions
-	// 从后端获取用户 home 目录
-	async function fetchUserHome() {
-		try {
-			const response = await fetch(`${API_BASE}/api/files/user-home`);
-			if (!response.ok) throw new Error('Failed to fetch user home');
-			const data = await response.json();
-			userHome = data.home;
-		} catch (e) {
-			console.error('Failed to fetch user home:', e);
-		}
-	}
+	// Note: fetchUserHome is now imported from store.ts
 
 	async function handleScan() {
 		console.log('handleScan called with config:', scanConfig);
@@ -622,9 +613,9 @@
 
 			// Update scanConfig with loaded values
 			scanConfig = {
-				mdoc_dir: loadedConfig.mdoc_dir || userHome,
-				image_dir: loadedConfig.image_dir || userHome,
-				png_dir: loadedConfig.png_dir || userHome,
+				mdoc_dir: loadedConfig.mdoc_dir || $userHome,
+				image_dir: loadedConfig.image_dir || $userHome,
+				png_dir: loadedConfig.png_dir || $userHome,
 				mdoc_prefix_cut: loadedConfig.mdoc_prefix_cut ?? 0,
 				mdoc_suffix_cut: loadedConfig.mdoc_suffix_cut ?? 0,
 				image_prefix_cut: loadedConfig.image_prefix_cut ?? 0,

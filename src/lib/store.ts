@@ -1,10 +1,36 @@
 import { writable, derived } from 'svelte/store'
 import type { TiltSeries, Frame, SelectionState, PngCacheItem, ScanConfig } from './types'
 
-// API 基础 URL
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// API 基础 URL - from .env file
+const API_BASE = import.meta.env.VITE_API_BASE;
 
 // ==================== 全局状态 ====================
+
+// User home directory
+export const userHome = writable<string>('')
+
+// Get user home directory from environment
+export function getUserHome(): string {
+	if (typeof window !== 'undefined' && window.process?.env?.HOME) {
+		return window.process.env.HOME;
+	}
+	const user = typeof window !== 'undefined' && window.process?.env?.USER || 'user';
+	return `/home/${user}`;
+}
+
+// Fetch user home from backend
+export async function fetchUserHome(): Promise<void> {
+	try {
+		const response = await fetch(`${API_BASE}/api/files/user-home`);
+		if (!response.ok) throw new Error('Failed to fetch user home');
+		const data = await response.json();
+		userHome.set(data.home);
+	} catch (e) {
+		console.error('Failed to fetch user home:', e);
+		// Fallback to environment-based home
+		userHome.set(getUserHome());
+	}
+}
 
 // Tilt Series 列表
 export const tiltSeries = writable<TiltSeries[]>([])

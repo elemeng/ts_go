@@ -102,13 +102,13 @@ ensure_directories() {
 # ==================== BACKEND ENVIRONMENT SETUP ====================
 ensure_backend_environment() {
     info "Ensuring backend environment..."
-    
+
     # Ensure uv is installed in user environment
     if ! command -v uv &>/dev/null; then
         info "Installing uv package manager..."
         pip install uv || warn "Failed to install uv, continuing anyway..."
     fi
-    
+
     # Sync dependencies if needed (missing flag or pyproject newer)
     # Run from project root to ensure uv operates in correct directory
     cd "$PROJECT_ROOT"
@@ -116,6 +116,26 @@ ensure_backend_environment() {
         warn "uv sync failed or timed out, attempting to continue anyway..."
     fi
     cd - >/dev/null
+}
+
+# ==================== UPDATE .ENV FILE ====================
+update_env_file() {
+    info "Updating .env file with backend configuration..."
+
+    # Get the actual IP address that the backend will bind to
+    # If BACKEND_HOST is 0.0.0.0, we need to get the actual IP address
+    local api_host="$BACKEND_HOST"
+    if [ "$BACKEND_HOST" = "0.0.0.0" ]; then
+        # Try to get the primary IP address
+        api_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+    fi
+
+    # Update or create .env file with the backend URL
+    cd "$PROJECT_ROOT"
+    cat > .env << EOF
+VITE_API_BASE=http://${api_host}:${BACKEND_PORT}
+EOF
+    info "  → API_BASE set to: http://${api_host}:${BACKEND_PORT}"
 }
 
 # ==================== SMART SERVICE CONTROL ====================
@@ -145,7 +165,7 @@ start_frontend() {
             fi
         fi
     fi
-    
+
     ensure_directories
     nohup bun run dev --host "$FRONTEND_HOST" > "$FRONTEND_LOG" 2>&1 &
     local pid=$!
@@ -234,6 +254,7 @@ start_backend() {
 start_all() {
     info "Starting all services..."
     ensure_directories
+    update_env_file
     
     # Start only if not running
     local started=0

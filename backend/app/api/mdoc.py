@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 import shutil
 
 from app.models.types import (
