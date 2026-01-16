@@ -298,7 +298,17 @@ stop_service() {
     local killed=0
     
     if [ -n "$pid" ] && is_process_alive "$pid"; then
-        kill "$pid" 2>/dev/null || true
+        # Get the process group ID (PGID) to kill the entire group
+        local pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+        
+        if [ -n "$pgid" ] && [ "$pgid" != "$pid" ]; then
+            # Kill the entire process group (handles multiprocessing child processes)
+            info "Killing process group $pgid (includes child processes)..."
+            kill -TERM -- -"$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        else
+            # No process group or same as PID, just kill the process
+            kill "$pid" 2>/dev/null || true
+        fi
         
         for i in {1..20}; do
             if ! is_process_alive "$pid"; then
@@ -311,7 +321,12 @@ stop_service() {
         
         if [ $killed -eq 0 ]; then
             warn "$service did not stop gracefully, force killing..."
-            kill -KILL "$pid" 2>/dev/null || true
+            # Force kill the entire process group
+            if [ -n "$pgid" ] && [ "$pgid" != "$pid" ]; then
+                kill -KILL -- -"$pgid" 2>/dev/null || true
+            else
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
             sleep 1
             success "$service forcefully stopped (PID: $pid)"
             killed=1
