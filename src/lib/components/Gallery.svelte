@@ -46,6 +46,14 @@
 	let isRefreshingCache = $state(false);
 	let isDeletingCache = $state(false);
 
+	// Cache progress state
+	let cacheProgress = $state({
+		cached: 0,
+		total: 0,
+		currentTs: '',
+		currentFrame: 0
+	});
+
 	// Scan Project state
 	// API 基础 URL - from .env file
 	const API_BASE = import.meta.env.VITE_API_BASE;
@@ -654,8 +662,13 @@
 		}
 
 		isCachingAll = true;
+		cacheProgress = { cached: 0, total: 0, currentTs: '', currentFrame: 0 };
+
 		try {
-			const result = await cacheAll();
+			const result = await cacheAll((progress) => {
+				// 更新进度状态
+				cacheProgress = progress;
+			});
 			toastStore.success(
 				`Cache complete: ${result.success}/${result.total} PNGs cached`,
 				`${result.failed} failed`
@@ -664,6 +677,7 @@
 			toastStore.error(`Cache failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
 		} finally {
 			isCachingAll = false;
+			cacheProgress = { cached: 0, total: 0, currentTs: '', currentFrame: 0 };
 		}
 	}
 
@@ -881,6 +895,40 @@
 						title="Invert frame selection in selected TS">↻ Invert Frames</button
 					>
 				</div>
+			</div>
+		{/if}
+
+		<!-- 缓存进度指示器 -->
+		{#if isCachingAll && cacheProgress.total > 0}
+			<div class="mb-4 alert alert-info">
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					fill="none"
+					viewBox="0 0 24 24"
+					class="h-6 w-6 shrink-0 stroke-current"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+					></path>
+				</svg>
+				<div class="flex-1">
+					<h3 class="font-bold">Caching PNGs...</h3>
+					<div class="text-xs">
+						{cacheProgress.cached} / {cacheProgress.total} cached
+						{#if cacheProgress.currentTs}
+							- Current: {cacheProgress.currentTs} frame {cacheProgress.currentFrame}
+						{/if}
+					</div>
+					<progress
+						class="progress progress-primary w-full"
+						value={cacheProgress.cached}
+						max={cacheProgress.total}
+					></progress>
+				</div>
+				<span class="loading loading-xs loading-spinner"></span>
 			</div>
 		{/if}
 

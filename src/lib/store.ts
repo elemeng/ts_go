@@ -450,7 +450,10 @@ export async function clearCacheForTs(tsId: string): Promise<void> {
 // ==================== 缓存管理功能 ====================
 
 // 缓存所有 PNG：为所有 tilt series 的所有帧生成并缓存 PNG
-export async function cacheAll(): Promise<{ success: number; failed: number; total: number }> {
+// 使用并行处理以提高性能，并支持进度回调
+export async function cacheAll(
+	onProgress?: (progress: { cached: number; total: number; currentTs: string; currentFrame: number }) => void
+): Promise<{ success: number; failed: number; total: number }> {
 	let success = 0;
 	let failed = 0;
 	let total = 0;
@@ -462,22 +465,48 @@ export async function cacheAll(): Promise<{ success: number; failed: number; tot
 	});
 	unsubscribe();
 
+	// 计算总帧数
 	for (const ts of allSeries) {
-		for (const frame of ts.frames) {
-			total++;
-			try {
-				// 尝试获取 PNG，如果不存在则会从后端获取
-				const png = await getPng(ts.id, frame.zIndex, 8, 90);
-				if (!png) {
-					// 如果缓存中没有，从后端获取
-					const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
-					await putPng(ts.id, frame.zIndex, blob, 8, 90);
-				}
-				success++;
-			} catch (e) {
-				console.error(`Failed to cache PNG for ${ts.id}/${frame.zIndex}:`, e);
-				failed++;
+		total += ts.frames.length;
+	}
+
+	let cached = 0;
+	const CONCURRENT_LIMIT = 10; // 同时处理的帧数限制
+
+	// 处理单个帧
+	const processFrame = async (ts: TiltSeries, frame: Frame): Promise<void> => {
+		try {
+			// 尝试获取 PNG，如果不存在则会从后端获取
+			const png = await getPng(ts.id, frame.zIndex, 8, 90);
+			if (!png) {
+				// 如果缓存中没有，从后端获取
+				const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
+				await putPng(ts.id, frame.zIndex, blob, 8, 90);
 			}
+			success++;
+		} catch (e) {
+			console.error(`Failed to cache PNG for ${ts.id}/${frame.zIndex}:`, e);
+			failed++;
+		} finally {
+			cached++;
+			// 报告进度
+			if (onProgress) {
+				onProgress({
+					cached,
+					total,
+					currentTs: ts.id,
+					currentFrame: frame.zIndex
+				});
+			}
+		}
+	};
+
+	// 并行处理所有帧
+	for (const ts of allSeries) {
+		// 将帧分成批次，每批最多 CONCURRENT_LIMIT 个
+		for (let i = 0; i < ts.frames.length; i += CONCURRENT_LIMIT) {
+			const batch = ts.frames.slice(i, i + CONCURRENT_LIMIT);
+			await Promise.all(batch.map((frame) => processFrame(ts, frame)));
 		}
 	}
 
