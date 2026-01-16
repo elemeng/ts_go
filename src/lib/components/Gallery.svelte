@@ -716,7 +716,7 @@
 					}
 				});
 			},
-			{ rootMargin: '50px' }
+			{ rootMargin: '500px' }
 		);
 		observer.observe(node);
 		return {
