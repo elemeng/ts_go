@@ -104,7 +104,7 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
                 lower_percentile=0.1,
                 upper_percentile=99.9,
                 gamma=0.75,  # Slight boost for low-contrast proteins
-                bg_subtract=True,
+                bg_subtract=False,
             )
 
             # Save to disk
