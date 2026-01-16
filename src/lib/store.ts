@@ -166,8 +166,167 @@ export async function getPng(
 	return null;
 }
 
-// 存入内存缓存
-function putPngToMemory(key: string, data: Blob): void {
+// ==================== IndexedDB 辅助函数 ====================
+
+// 从 IndexedDB 删除指定 key（用于用户显式删除或配额驱逐）
+async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota' = 'user'): Promise<void> {
+	try {
+		const database = await initDB();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([STORE_NAME], 'readwrite');
+			const store = transaction.objectStore(STORE_NAME);
+			const request = store.delete(key);
+
+			request.onsuccess = () => {
+				// 更新 IndexedDB 大小
+				updateIndexedDbSize();
+				if (reason === 'quota') {
+					console.log(`IndexedDB quota eviction: removed ${key}`);
+				}
+				resolve();
+			};
+			request.onerror = () => reject(request.error);
+		});
+	} catch (e) {
+		console.error('Failed to delete from IndexedDB:', e);
+	}
+}
+
+// 检查并执行 IndexedDB 配额驱逐
+async function checkIndexedDbQuota(newItemSize: number): Promise<void> {
+	let currentSize = 0;
+	indexedDbCacheSize.subscribe((n) => {
+		currentSize = n;
+	})();
+
+	// 如果添加新项后不会超过限制，不需要驱逐
+	if (currentSize + newItemSize <= MAX_INDEXEDDB_CACHE) {
+		return;
+	}
+
+	// 需要驱逐：从 IndexedDB 中删除最旧的项（不在内存中的优先）
+	try {
+		const database = await initDB();
+		const transaction = database.transaction([STORE_NAME], 'readwrite');
+		const store = transaction.objectStore(STORE_NAME);
+
+		// 获取所有键
+		const getAllKeys = store.getAllKeys();
+		getAllKeys.onsuccess = () => {
+			const keys = getAllKeys.result as string[];
+
+			// 优先删除不在内存中的项（最不活跃）
+			const keysNotInMemory = keys.filter((key) => !memoryCache.has(key));
+
+			// 按访问时间排序（通过键的最后修改时间，这里简化为按顺序）
+			let spaceNeeded = currentSize + newItemSize - MAX_INDEXEDDB_CACHE;
+			let deletedCount = 0;
+
+			for (const key of keysNotInMemory) {
+				if (spaceNeeded <= 0) break;
+
+				// 获取项的大小
+				const getRequest = store.get(key);
+				getRequest.onsuccess = () => {
+					const blob = getRequest.result as Blob;
+					if (blob) {
+						store.delete(key);
+						spaceNeeded -= blob.size;
+						deletedCount++;
+					}
+				};
+			}
+
+			// 如果删除不在内存中的项还不够，继续删除在内存中的项
+			if (spaceNeeded > 0) {
+				const keysInMemory = keys.filter((key) => memoryCache.has(key));
+				// 按内存缓存中的时间戳排序（最旧的优先）
+				const sortedKeys = keysInMemory.sort((a, b) => {
+					const itemA = memoryCache.get(a);
+					const itemB = memoryCache.get(b);
+					return (itemA?.timestamp || 0) - (itemB?.timestamp || 0);
+				});
+
+				for (const key of sortedKeys) {
+					if (spaceNeeded <= 0) break;
+
+					const getRequest = store.get(key);
+					getRequest.onsuccess = () => {
+						const blob = getRequest.result as Blob;
+						if (blob) {
+							store.delete(key);
+							spaceNeeded -= blob.size;
+							deletedCount++;
+						}
+					};
+				}
+			}
+
+			transaction.oncomplete = () => {
+				if (deletedCount > 0) {
+					console.log(`IndexedDB quota eviction: removed ${deletedCount} items`);
+					updateIndexedDbSize();
+				}
+			};
+		};
+	} catch (e) {
+		console.error('Failed to check IndexedDB quota:', e);
+	}
+}
+
+// 更新 IndexedDB 大小
+async function updateIndexedDbSize(): Promise<void> {
+	try {
+		const database = await initDB();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([STORE_NAME], 'readonly');
+			const store = transaction.objectStore(STORE_NAME);
+			const request = store.getAll();
+
+			request.onsuccess = () => {
+				const blobs = request.result as Blob[];
+				const totalSize = blobs.reduce((sum, blob) => sum + blob.size, 0);
+				indexedDbCacheSize.set(totalSize);
+				resolve();
+			};
+			request.onerror = () => reject(request.error);
+		});
+	} catch (e) {
+		console.error('Failed to update IndexedDB size:', e);
+	}
+}
+
+// 存入 IndexedDB
+async function putToIndexedDB(key: string, data: Blob): Promise<void> {
+	try {
+		const database = await initDB();
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([STORE_NAME], 'readwrite');
+			const store = transaction.objectStore(STORE_NAME);
+
+			// 先检查配额，如果需要则驱逐
+			checkIndexedDbQuota(data.size).catch((e) => {
+				console.error('Failed to check IndexedDB quota:', e);
+			});
+
+			const request = store.put(data, key);
+
+			request.onsuccess = () => {
+				// 更新 IndexedDB 大小
+				updateIndexedDbSize();
+				resolve();
+			};
+			request.onerror = () => reject(request.error);
+		});
+	} catch (e) {
+		console.error('Failed to cache PNG in IndexedDB:', e);
+	}
+}
+
+// ==================== PNG 缓存操作 ====================
+
+// 存入内存缓存并同步到 IndexedDB
+async function putPngToMemory(key: string, data: Blob): Promise<void> {
 	const size = data.size;
 	const item: PngCacheItem = { data, size: size, timestamp: Date.now() };
 	let cacheSize = 0;
@@ -183,7 +342,7 @@ function putPngToMemory(key: string, data: Blob): void {
 		cacheSize -= existingSize;
 	}
 
-	// LRU 淘汰
+	// LRU 淘汰 - 只从内存中删除，保留在 IndexedDB
 	while (cacheSize + size > MAX_MEMORY_CACHE && memoryCache.size > 0) {
 		const oldestKey = memoryCache.keys().next().value;
 		if (!oldestKey) break;
@@ -191,13 +350,19 @@ function putPngToMemory(key: string, data: Blob): void {
 		currentCacheSize.update((n) => n - oldest.size);
 		memoryCache.delete(oldestKey);
 		cacheSize -= oldest.size;
+
+		// 注意：不删除 IndexedDB 中的项，只从内存中驱逐
+		// IndexedDB 的驱逐由 checkIndexedDbQuota 在配额超限时处理
 	}
 
 	memoryCache.set(key, item);
 	currentCacheSize.update((n) => n + size);
+
+	// 同步到 IndexedDB
+	await putToIndexedDB(key, data);
 }
 
-// 存入 IndexedDB
+// 存入 IndexedDB 和内存
 export async function putPng(
 	tsId: string,
 	zIndex: number,
@@ -207,23 +372,8 @@ export async function putPng(
 ): Promise<void> {
 	const key = cacheKey(tsId, zIndex, bin, quality);
 
-	// 存入内存
-	putPngToMemory(key, data);
-
-	// 存入 IndexedDB
-	try {
-		const database = await initDB();
-		return new Promise((resolve, reject) => {
-			const transaction = database.transaction([STORE_NAME], 'readwrite');
-			const store = transaction.objectStore(STORE_NAME);
-			const request = store.put(data, key);
-
-			request.onsuccess = () => resolve();
-			request.onerror = () => reject(request.error);
-		});
-	} catch (e) {
-		console.error('Failed to cache PNG:', e);
-	}
+	// 存入内存（会自动同步到 IndexedDB）
+	await putPngToMemory(key, data);
 }
 
 // 清除缓存
@@ -240,7 +390,11 @@ export async function clearCache(): Promise<void> {
 			const store = transaction.objectStore(STORE_NAME);
 			const request = store.clear();
 
-			request.onsuccess = () => resolve();
+			request.onsuccess = () => {
+				// 更新 IndexedDB 大小
+				indexedDbCacheSize.set(0);
+				resolve();
+			};
 			request.onerror = () => reject(request.error);
 		});
 	} catch (e) {
@@ -248,7 +402,7 @@ export async function clearCache(): Promise<void> {
 	}
 }
 
-// 清除特定 tilt series 的缓存
+// 清除特定 tilt series 的缓存（用户显式操作）
 export async function clearCacheForTs(tsId: string): Promise<void> {
 	// 清除内存缓存中该 TS 的所有帧
 	const keysToDelete: string[] = [];
@@ -263,7 +417,7 @@ export async function clearCacheForTs(tsId: string): Promise<void> {
 	}
 	keysToDelete.forEach((key) => memoryCache.delete(key));
 
-	// 清除 IndexedDB 中该 TS 的所有帧
+	// 清除 IndexedDB 中该 TS 的所有帧（用户显式操作）
 	try {
 		const database = await initDB();
 		const transaction = database.transaction([STORE_NAME], 'readwrite');
@@ -273,11 +427,20 @@ export async function clearCacheForTs(tsId: string): Promise<void> {
 		const getAllKeys = store.getAllKeys();
 		getAllKeys.onsuccess = () => {
 			const keys = getAllKeys.result as string[];
+			let deletedCount = 0;
 			keys.forEach((key) => {
 				if (key.startsWith(tsId + '_')) {
 					store.delete(key);
+					deletedCount++;
 				}
 			});
+
+			// 如果有删除，更新 IndexedDB 大小
+			if (deletedCount > 0) {
+				transaction.oncomplete = () => {
+					updateIndexedDbSize();
+				};
+			}
 		};
 	} catch (e) {
 		console.error('Failed to clear cache for TS:', e);
@@ -566,3 +729,8 @@ export const stats = derived([tiltSeries, selections], ([$tiltSeries, $selection
 
 // 初始化
 loadPersistedSelections();
+
+// 初始化 IndexedDB 大小跟踪
+updateIndexedDbSize().catch((e) => {
+	console.error('Failed to initialize IndexedDB size tracking:', e);
+});

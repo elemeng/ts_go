@@ -21,7 +21,7 @@ This document describes the caching architecture for PNG images, MDOC files, and
 
 #### Two-Tier Caching
 
-The PNG cache uses a hierarchical two-tier design:
+The PNG cache uses a hierarchical two-tier design with independent eviction policies:
 
 ```
 Request → Memory Cache → IndexedDB → Backend API
@@ -30,12 +30,14 @@ Request → Memory Cache → IndexedDB → Backend API
          (miss: fetch from backend, cache both)
 ```
 
+**Key Design Principle:** Memory cache and IndexedDB operate independently. Items evicted from memory remain in IndexedDB until the IndexedDB quota is exceeded or the user explicitly deletes them.
+
 #### 1. Memory Cache (LRU)
 
 - **Maximum Size:** 2GB
 - **Data Structure:** `Map<string, PngCacheItem>`
 - **Cache Key Format:** `{tsId}_{zIndex}_bin{bin}_q{quality}`
-- **Eviction Policy:** LRU when exceeding 90% capacity
+- **Eviction Policy:** LRU when exceeding 90% capacity (memory only, does NOT delete from IndexedDB)
 - **Tracked Properties:**
   - `data`: Blob (PNG image data)
   - `size`: number (bytes)
@@ -47,13 +49,13 @@ Request → Memory Cache → IndexedDB → Backend API
 // Get PNG with automatic promotion
 async function getPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob | null>
 
-// Store in memory with LRU eviction
-function putPngToMemory(key: string, data: Blob): void
+// Store in memory with LRU eviction (syncs to IndexedDB)
+async function putPngToMemory(key: string, data: Blob): Promise<void>
 
 // Clear all memory cache
 async function clearCache(): Promise<void>
 
-// Clear specific tilt series
+// Clear specific tilt series (user action, deletes from both tiers)
 async function clearCacheForTs(tsId: string): Promise<void>
 ```
 
@@ -65,6 +67,8 @@ async function clearCacheForTs(tsId: string): Promise<void>
 - **Store Name:** `pngs`
 - **Persistence:** Survives browser restarts
 - **Operations:** Async with Promise-based API
+- **Size Tracking:** Real-time calculation and monitoring
+- **Eviction Policy:** Quota-based when exceeding 10GB (independent of memory eviction)
 
 **Initialization:**
 
@@ -80,7 +84,24 @@ async function putPng(tsId: string, zIndex: number, data: Blob, bin = 8, quality
 
 // Retrieve from IndexedDB and promote to memory
 async function getPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob | null>
+
+// Check and enforce IndexedDB quota (evicts if needed)
+async function checkIndexedDbQuota(newItemSize: number): Promise<void>
+
+// Update IndexedDB size tracking
+async function updateIndexedDbSize(): Promise<void>
+
+// Delete from IndexedDB (user action or quota eviction)
+async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota'): Promise<void>
 ```
+
+**IndexedDB Eviction Strategy:**
+
+When the 10GB quota is exceeded, items are evicted in this order:
+1. **Priority 1:** Items not in memory cache (least recently accessed)
+2. **Priority 2:** Oldest items in memory cache (by timestamp)
+
+This ensures that frequently accessed items are preserved while freeing space for new items.
 
 #### Cache Management Functions
 
@@ -467,10 +488,19 @@ Delete → Backup → Delete file → Remove from project_state
 
 ### Cache Invalidation
 
-**PNG Cache Cleared On:**
+**PNG Memory Cache Cleared On:**
+- LRU eviction (when exceeding 2GB limit)
 - Manual delete operation
 - Refresh cache operation
 - Save operation (per tilt series)
+
+**PNG IndexedDB Cache Cleared On:**
+- User explicit delete operations (deleteCache, clearCacheForTs)
+- Refresh cache operation
+- Quota eviction (when exceeding 10GB limit)
+- Save operation (per tilt series)
+
+**Note:** Items evicted from memory cache remain in IndexedDB until quota is exceeded or user explicitly deletes them.
 
 **MDOC Cache Cleared On:**
 - New scan
@@ -495,10 +525,12 @@ Delete → Backup → Delete file → Remove from project_state
 - Concurrent task deduplication (backend)
 
 **Optimizations:**
-- Memory cache for frequently accessed PNGs
-- IndexedDB for long-term storage
-- Automatic promotion from IndexedDB to memory
-- LRU eviction with size tracking
+- Memory cache for frequently accessed PNGs (fast access layer)
+- IndexedDB for persistent storage (independent of memory eviction)
+- Automatic promotion from IndexedDB to memory on access
+- LRU eviction for memory (2GB limit)
+- Quota-based eviction for IndexedDB (10GB limit)
+- Real-time IndexedDB size tracking
 - Concurrent request deduplication
 
 ### MDOC Cache
@@ -517,25 +549,25 @@ Delete → Backup → Delete file → Remove from project_state
 
 ### Potential Issues
 
-1. **IndexedDB Size Tracking:**
-   - `indexedDbCacheSize` store is defined but not updated
-   - No actual IndexedDB size tracking implemented
-   - No IndexedDB eviction policy
-
-2. **localStorage Capacity:**
+1. **localStorage Capacity:**
    - localStorage has 5-10MB limit
    - May overflow with large tiltSeries data
    - No compression or chunking strategy
 
-3. **Cache Versioning:**
+2. **Cache Versioning:**
    - No cache versioning strategy
    - No migration path for cache format changes
    - Potential for stale data after updates
 
-4. **Memory Usage:**
+3. **Memory Usage:**
    - Multiple state stores may consume significant memory
    - No memory cleanup on component unmount
    - Potential memory leaks with long-running sessions
+
+4. **IndexedDB Quota Management:**
+   - Quota eviction is triggered on each put operation
+   - May cause performance impact with large datasets
+   - No manual quota management controls for users
 
 ---
 
@@ -549,23 +581,45 @@ Delete → Backup → Delete file → Remove from project_state
 // Get PNG from cache hierarchy
 async function getPng(tsId: string, zIndex: number, bin?: number, quality?: number): Promise<Blob | null>
 
-// Store PNG in cache
+// Store PNG in cache (syncs to both memory and IndexedDB)
 async function putPng(tsId: string, zIndex: number, data: Blob, bin?: number, quality?: number): Promise<void>
 
-// Clear all PNG cache
+// Store in memory with LRU eviction (syncs to IndexedDB)
+async function putPngToMemory(key: string, data: Blob): Promise<void>
+
+// Clear all PNG cache (both memory and IndexedDB)
 async function clearCache(): Promise<void>
 
-// Clear PNG cache for specific tilt series
+// Clear PNG cache for specific tilt series (user action, deletes from both tiers)
 async function clearCacheForTs(tsId: string): Promise<void>
 
 // Cache all PNGs
 async function cacheAll(): Promise<{ success: number; failed: number; total: number }>
 
-// Refresh cache from backend
+// Refresh cache from backend (clears and re-fetches)
 async function refreshCache(): Promise<{ success: number; failed: number; total: number }>
 
 // Delete all cached PNGs
 async function deleteCache(): Promise<void>
+```
+
+#### IndexedDB Helper Functions
+
+```typescript
+// Initialize IndexedDB database
+async function initDB(): Promise<IDBDatabase>
+
+// Check and enforce IndexedDB quota (evicts if needed)
+async function checkIndexedDbQuota(newItemSize: number): Promise<void>
+
+// Update IndexedDB size tracking
+async function updateIndexedDbSize(): Promise<void>
+
+// Store in IndexedDB with quota checking
+async function putToIndexedDB(key: string, data: Blob): Promise<void>
+
+// Delete from IndexedDB (user action or quota eviction)
+async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota'): Promise<void>
 ```
 
 #### Selection State Functions
@@ -739,10 +793,13 @@ interface PngCacheItem {
 ### When Using PNG Cache
 
 1. **Use `getPng()` for all PNG access** - It handles the cache hierarchy automatically
-2. **Let LRU manage memory** - Don't manually clear unless necessary
+2. **Let LRU manage memory** - Don't manually clear unless necessary; items stay in IndexedDB
 3. **Use `cacheAll()` for offline preparation** - Pre-cache before going offline
 4. **Use `refreshCache()` after external changes** - Sync after regenerating PNGs with external tools
-5. **Use `deleteCache()` to free space** - Clear when cache is too large
+5. **Use `deleteCache()` to free space** - Clears both memory and IndexedDB caches
+6. **Understand cache independence** - Memory eviction doesn't delete from IndexedDB; IndexedDB has its own quota
+7. **Monitor cache sizes** - Check the UI badge for memory and IndexedDB usage
+8. **Plan for IndexedDB quota** - 10GB limit with automatic eviction; plan usage accordingly
 
 ### When Using MDOC Cache
 
@@ -776,9 +833,19 @@ interface PngCacheItem {
 - Check: LRU eviction is working
 - Solution: Reduce MAX_MEMORY_CACHE or clear cache
 
+**Problem:** IndexedDB quota exceeded
+- Check: IndexedDB size in UI badge
+- Check: Quota eviction is working
+- Solution: Use `deleteCache()` to free space, or let quota eviction handle it
+
+**Problem:** Items disappearing from IndexedDB
+- Check: If disappearing without user action, check quota eviction logs
+- Check: IndexedDB size is approaching 10GB limit
+- Solution: Monitor quota usage, use `deleteCache()` if needed
+
 **Problem:** Stale PNGs after regeneration
 - Check: External tool regenerated files
-- Solution: Use `refreshCache()` to sync
+- Solution: Use `refreshCache()` to sync (clears IndexedDB and re-fetches)
 
 ### MDOC Cache Issues
 
@@ -813,30 +880,37 @@ interface PngCacheItem {
 
 ## Future Improvements
 
-1. **IndexedDB Size Tracking**
-   - Implement actual size calculation
-   - Add IndexedDB eviction policy
-   - Monitor and alert on quota usage
-
-2. **localStorage Capacity Management**
+1. **localStorage Capacity Management**
    - Implement compression for large data
    - Add chunking for oversized data
    - Fallback to IndexedDB for large datasets
 
-3. **Cache Versioning**
+2. **Cache Versioning**
    - Add version metadata to cache
    - Implement migration strategies
    - Automatic cache invalidation on version changes
 
-4. **Memory Management**
+3. **Memory Management**
    - Implement cleanup on component unmount
    - Add memory usage monitoring
    - Automatic cleanup for stale data
 
-5. **Performance Monitoring**
+4. **Performance Monitoring**
    - Add cache hit/miss metrics
    - Track operation timings
    - Performance dashboard for developers
+
+5. **IndexedDB Optimization**
+   - Implement lazy quota checking (batch operations)
+   - Add manual quota management controls
+   - Implement cache warming strategies
+   - Add cache compression for large PNGs
+
+6. **Advanced Cache Strategies**
+   - Implement predictive caching based on usage patterns
+   - Add cache priority levels (critical vs optional)
+   - Implement cache preloading for likely-to-be-accessed items
+   - Add cache sharing across browser tabs
 
 ---
 
