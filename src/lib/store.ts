@@ -736,15 +736,21 @@ export function loadPersistedSelections(): void {
 
 // 扫描项目
 export async function scanProject(config: ScanConfig): Promise<TiltSeries[]> {
+	console.log('[scanProject] Starting scan with config:', config);
 	const response = await fetch(`${API_BASE}/api/mdoc/scan`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(config)
 	});
 
-	if (!response.ok) throw new Error('Scan failed');
+	if (!response.ok) {
+		const errorText = await response.text();
+		console.error('[scanProject] Scan failed:', response.status, errorText);
+		throw new Error(`Scan failed: ${response.status} - ${errorText}`);
+	}
 
 	const data = await response.json();
+	console.log('[scanProject] Scan completed, found', data.tiltSeries.length, 'tilt series');
 	tiltSeries.set(data.tiltSeries);
 	return data.tiltSeries;
 }

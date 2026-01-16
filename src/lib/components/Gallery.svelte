@@ -485,11 +485,14 @@
 			if (savedCount > 0 || deletedCount > 0) {
 				toastStore.info('Refreshing project data...');
 
+				// Preserve original TS IDs before cleanup
+				const originalTsIds = new Set($tiltSeries.map((ts) => ts.id));
+
 				// Clean up all state
 				await cleanupAfterSave();
 
-				// Reset selection to all TS
-				selectedTsIds = new Set($tiltSeries.map((ts) => ts.id));
+				// Reset selection to all TS (using preserved IDs)
+				selectedTsIds = originalTsIds;
 
 				// Rescan with same configuration
 				if (scanConfig.mdoc_dir) {
@@ -555,16 +558,19 @@
 	// Note: fetchUserHome is now imported from store.ts
 
 	async function handleScan() {
-		console.log('handleScan called with config:', $state.snapshot(scanConfig));
+		console.log('[handleScan] Called with config:', $state.snapshot(scanConfig));
 		isScanning = true;
 		scanError = null;
 
 		try {
+			console.log('[handleScan] Starting scan project...');
 			await scanProject(scanConfig);
+			console.log('[handleScan] Scan completed successfully');
 			showScanDialog = false;
 		} catch (e) {
-			console.error('Scan error:', e);
+			console.error('[handleScan] Scan error:', e);
 			scanError = e instanceof Error ? e.message : 'Scan failed';
+			toastStore.error(`Scan failed: ${scanError}`);
 		} finally {
 			isScanning = false;
 		}
