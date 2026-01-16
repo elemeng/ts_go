@@ -106,11 +106,13 @@ ensure_backend_environment() {
     # Ensure uv is installed in user environment
     if ! command -v uv &>/dev/null; then
         info "Installing uv package manager..."
-        pip install uv
+        pip install uv || warn "Failed to install uv, continuing anyway..."
     fi
     
     # Sync dependencies if needed (missing flag or pyproject newer)
-    uv sync 
+    if ! uv sync; then
+        warn "uv sync failed or timed out, attempting to continue anyway..."
+    fi
 }
 
 # ==================== SMART SERVICE CONTROL ====================
@@ -135,7 +137,11 @@ start_frontend() {
     if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
         info "Installing frontend dependencies..."
         cd "$FRONTEND_DIR"
-        bun install --frozen-lockfile 2>/dev/null || npm ci
+        if ! bun install --frozen-lockfile 2>/dev/null; then
+            if ! npm ci; then
+                warn "bun install and npm ci failed or timed out, attempting to continue anyway..."
+            fi
+        fi
         cd - >/dev/null
     fi
     
@@ -192,7 +198,7 @@ start_backend() {
     ensure_backend_environment
     
     # Activate venv and start service
-    source "$BACKEND_DIR/.venv/bin/activate"
+    source ".venv/bin/activate"
     cd "$BACKEND_DIR"
     nohup uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload > "$BACKEND_LOG" 2>&1 &
     local pid=$!
