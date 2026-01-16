@@ -54,6 +54,12 @@ class TiltSeries(BaseModel):
 
 class ScanConfig(BaseModel):
     """Configuration for scanning a project directory."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     mdoc_dir: str
     image_dir: str
     png_dir: str
@@ -82,12 +88,24 @@ class BatchSaveRequest(BaseModel):
     IMPORTANT: selections dict maps zIndex (immutable) to selected state.
     The zIndex values must match the original zIndex from the TiltSeries.
     """
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     mdocPath: str
     selections: Dict[int, bool]  # zIndex -> selected (zIndex is immutable key)
 
 
 class BatchSaveResponse(BaseModel):
     """Response from batch save operation."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     success: bool
     message: str
     backupPath: Optional[str] = None
@@ -96,11 +114,23 @@ class BatchSaveResponse(BaseModel):
 
 class BackupDeleteRequest(BaseModel):
     """Request to backup and delete an mdoc file."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     mdocPath: str
 
 
 class BackupDeleteResponse(BaseModel):
     """Response from backup-delete operation."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     success: bool
     message: str
     backupPath: Optional[str] = None
@@ -108,5 +138,11 @@ class BackupDeleteResponse(BaseModel):
 
 class PngRequest(BaseModel):
     """Parameters for PNG generation."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
     bin: int = 8
     quality: int = 90

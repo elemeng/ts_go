@@ -89,9 +89,7 @@ async def scan_project(config: ScanConfig):
 
         print(f"Successfully scanned {len(tilt_series)} tilt series")
 
-        
-
-                return MdocScanResponse(tiltSeries=tilt_series, total=len(tilt_series))
+        return MdocScanResponse(tiltSeries=tilt_series, total=len(tilt_series))
 
     except HTTPException:
         raise
