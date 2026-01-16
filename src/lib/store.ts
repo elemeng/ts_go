@@ -9,6 +9,9 @@ const API_BASE = import.meta.env.VITE_API_BASE;
 // User home directory
 export const userHome = writable<string>('');
 
+// Track in-flight PNG fetches to prevent duplicates
+const inFlightFetches = new Map<string, Promise<Blob>>();
+
 // Get user home directory from environment
 export function getUserHome(): string {
 	if (typeof window !== 'undefined' && window.process?.env?.HOME) {
@@ -164,6 +167,47 @@ export async function getPng(
 	}
 
 	return null;
+}
+
+// 获取 PNG（带去重，用于防止 cacheAll 和 lazy loading 重复请求）
+export async function getPngDeduped(
+	tsId: string,
+	zIndex: number,
+	bin = 8,
+	quality = 90
+): Promise<Blob> {
+	const key = cacheKey(tsId, zIndex, bin, quality);
+
+	// 检查是否已有相同的请求在进行中
+	if (inFlightFetches.has(key)) {
+		console.log(`[getPngDeduped] Waiting for existing fetch: ${key}`);
+		return inFlightFetches.get(key)!;
+	}
+
+	// 创建新的 fetch promise
+	const fetchPromise = (async () => {
+		try {
+			// 先尝试从缓存获取
+			const cached = await getPng(tsId, zIndex, bin, quality);
+			if (cached) {
+				console.log(`[getPngDeduped] Cache hit: ${key}`);
+				return cached;
+			}
+
+			// 缓存未命中，从后端获取
+			console.log(`[getPngDeduped] Cache miss, fetching: ${key}`);
+			const blob = await fetchPng(tsId, zIndex, bin, quality);
+			return blob;
+		} finally {
+			// 清除 in-flight 记录
+			inFlightFetches.delete(key);
+		}
+	})();
+
+	// 记录到 in-flight map
+	inFlightFetches.set(key, fetchPromise);
+
+	return fetchPromise;
 }
 
 // ==================== IndexedDB 辅助函数 ====================
@@ -502,13 +546,8 @@ export async function cacheAll(
 	// 处理单个帧
 	const processFrame = async (ts: TiltSeries, frame: Frame, frameIndex: number): Promise<void> => {
 		try {
-			// 尝试获取 PNG，如果不存在则会从后端获取
-			const png = await getPng(ts.id, frame.zIndex, 8, 90);
-			if (!png) {
-				// 如果缓存中没有，从后端获取
-				const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
-				await putPng(ts.id, frame.zIndex, blob, 8, 90);
-			}
+			// 使用去重版本获取 PNG，防止与 lazy loading 重复请求
+			const png = await getPngDeduped(ts.id, frame.zIndex, 8, 90);
 			success++;
 		} catch (e) {
 			console.error(`Failed to cache PNG for ${ts.id}/${frame.zIndex}:`, e);

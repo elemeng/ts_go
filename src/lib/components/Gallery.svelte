@@ -13,8 +13,7 @@
 		clearTsSelections,
 		batchSave,
 		clearCache,
-		getPng,
-		putPng,
+		getPngDeduped,
 		cacheWarning,
 		scanProject,
 		loadPersistedTiltSeries,
@@ -509,44 +508,16 @@
 			try {
 				console.log(`[loadFramePng] Loading PNG for ${params.tsId}/${params.zIndex}`);
 
-				// 先尝试从缓存获取
-				const cached = await getPng(params.tsId, params.zIndex, 8, 90);
-				if (cached) {
-					console.log(`[loadFramePng] Cache hit for ${params.tsId}/${params.zIndex}`);
-					const url = URL.createObjectURL(cached);
-					currentUrl = url;
-					node.src = url;
-					// Mark as loaded
-					loadedPngFrames = new Set(loadedPngFrames).add(frameKey);
-					return;
-				}
+				// 使用去重版本获取 PNG，防止与 cacheAll 重复请求
+				const blob = await getPngDeduped(params.tsId, params.zIndex, 8, 90);
+				console.log(`[loadFramePng] Received blob size: ${blob.size} bytes for ${params.tsId}/${params.zIndex}`);
 
-				console.log(`[loadFramePng] Cache miss for ${params.tsId}/${params.zIndex}, fetching from backend`);
-
-				// 从后端加载
-				const response = await fetch(
-					`${API_BASE}/api/preview/${params.tsId}/${params.zIndex}?bin=8&quality=90`
-				);
-
-				console.log(`[loadFramePng] Backend response status: ${response.status}`);
-
-				if (response.ok) {
-					const blob = await response.blob();
-					console.log(`[loadFramePng] Received blob size: ${blob.size} bytes for ${params.tsId}/${params.zIndex}`);
-
-					// 缓存到存储
-					await putPng(params.tsId, params.zIndex, blob, 8, 90);
-					const url = URL.createObjectURL(blob);
-					currentUrl = url;
-					node.src = url;
-					// Mark as loaded
-					loadedPngFrames = new Set(loadedPngFrames).add(frameKey);
-					console.log(`[loadFramePng] Successfully loaded PNG for ${params.tsId}/${params.zIndex}`);
-				} else {
-					const errorText = await response.text();
-					console.error(`[loadFramePng] Backend error ${response.status}: ${errorText} for ${params.tsId}/${params.zIndex}`);
-					toastStore.warning(`Failed to load PNG: ${response.status}`, `${params.tsId}/${params.zIndex}`);
-				}
+				const url = URL.createObjectURL(blob);
+				currentUrl = url;
+				node.src = url;
+				// Mark as loaded
+				loadedPngFrames = new Set(loadedPngFrames).add(frameKey);
+				console.log(`[loadFramePng] Successfully loaded PNG for ${params.tsId}/${params.zIndex}`);
 			} catch (e) {
 				console.error(`[loadFramePng] Exception loading PNG for ${params.tsId}/${params.zIndex}:`, e);
 				toastStore.error(`Failed to load PNG`, `${params.tsId}/${params.zIndex}: ${e instanceof Error ? e.message : 'Unknown error'}`);
