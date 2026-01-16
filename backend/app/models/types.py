@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict
 
 
@@ -15,14 +15,12 @@ class Frame(BaseModel):
     The zIndex serves as the primary key and should be preserved across
     save operations even if other frames are deleted.
     """
+    model_config = ConfigDict(populate_by_name=True)
+    
     zIndex: int
     angle: float
     mrcPath: str
     selected: bool
-    
-    class Config:
-        # Prevent accidental modification of immutable fields
-        frozen = False  # Pydantic doesn't support frozen=True with mutable fields
 
 
 class TiltSeries(BaseModel):
@@ -38,6 +36,8 @@ class TiltSeries(BaseModel):
     When saving, only the 'selected' state of frames should change.
     The zIndex values must never be reassigned or modified.
     """
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: str
     mdocPath: str
     frames: List[Frame]
@@ -57,6 +57,8 @@ class ScanConfig(BaseModel):
 
 class MdocScanResponse(BaseModel):
     """Response from project scan operation."""
+    model_config = ConfigDict(populate_by_name=True)
+    
     tiltSeries: List[TiltSeries]
     total: int
 
