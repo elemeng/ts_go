@@ -13,7 +13,7 @@ readonly NC='\033[0m'
 
 # Project structure
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly FRONTEND_DIR="$PROJECT_ROOT/frontend"
+readonly FRONTEND_DIR="$PROJECT_ROOT"
 readonly BACKEND_DIR="$PROJECT_ROOT/backend"
 readonly LOGS_DIR="$PROJECT_ROOT/logs"
 
@@ -110,9 +110,12 @@ ensure_backend_environment() {
     fi
     
     # Sync dependencies if needed (missing flag or pyproject newer)
+    # Run from project root to ensure uv operates in correct directory
+    cd "$PROJECT_ROOT"
     if ! uv sync; then
         warn "uv sync failed or timed out, attempting to continue anyway..."
     fi
+    cd - >/dev/null
 }
 
 # ==================== SMART SERVICE CONTROL ====================
@@ -133,23 +136,19 @@ start_frontend() {
         exit 1
     fi
     
-    # Install dependencies if needed
+# Install dependencies if needed
     if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
         info "Installing frontend dependencies..."
-        cd "$FRONTEND_DIR"
         if ! bun install --frozen-lockfile 2>/dev/null; then
             if ! npm ci; then
                 warn "bun install and npm ci failed or timed out, attempting to continue anyway..."
             fi
         fi
-        cd - >/dev/null
     fi
     
     ensure_directories
-    cd "$FRONTEND_DIR"
     nohup bun run dev > "$FRONTEND_LOG" 2>&1 &
     local pid=$!
-    cd - >/dev/null
     
     # Verify process started
     sleep 1
