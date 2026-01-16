@@ -48,11 +48,11 @@ async def scan_project(config: ScanConfig):
         print(f"Found {len(mdoc_files)} mdoc files to scan")
 
         # Parse mdoc files in parallel
-        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor
         import functools
 
         def parse_single_mdoc(mdoc_file_path: str):
-            """Parse a single mdoc file - runs in worker process"""
+            """Parse a single mdoc file - runs in worker thread"""
             try:
                 ts = parse_mdoc_file(mdoc_file_path, matcher)
                 return ts
@@ -60,14 +60,13 @@ async def scan_project(config: ScanConfig):
                 print(f"Warning: Failed to parse {mdoc_file_path}: {e}")
                 return None
 
-        # Use ProcessPoolExecutor for parallel parsing
-
+        # Use ThreadPoolExecutor for parallel parsing (can share matcher object)
         tilt_series: List[TiltSeries] = []
         max_workers = min(
             cpu_count(), len(mdoc_files)
-        )  # Limit to 4 workers or number of files
+        )  # Limit to CPU count or number of files
 
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all parsing tasks
             future_to_file = {
                 executor.submit(parse_single_mdoc, str(mdoc_file)): mdoc_file
