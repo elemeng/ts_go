@@ -15,7 +15,11 @@ class Frame(BaseModel):
     The zIndex serves as the primary key and should be preserved across
     save operations even if other frames are deleted.
     """
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
     
     zIndex: int
     angle: float
@@ -36,7 +40,11 @@ class TiltSeries(BaseModel):
     When saving, only the 'selected' state of frames should change.
     The zIndex values must never be reassigned or modified.
     """
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
     
     id: str
     mdocPath: str
@@ -57,7 +65,11 @@ class ScanConfig(BaseModel):
 
 class MdocScanResponse(BaseModel):
     """Response from project scan operation."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
     
     tiltSeries: List[TiltSeries]
     total: int

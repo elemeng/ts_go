@@ -8,6 +8,18 @@ app = FastAPI(
 	version="0.0.1",
 )
 
+# Configure JSON response serializer to use camelCase instead of snake_case
+from fastapi.encoders import jsonable_encoder
+import json
+
+def custom_json_encoder(obj):
+    """Custom JSON encoder that preserves camelCase field names"""
+    if isinstance(obj, dict):
+        return {k: v for k, v in obj.items()}
+    return obj
+
+app.json_encoder = custom_json_encoder
+
 # CORS configuration
 app.add_middleware(
 	CORSMiddleware,
