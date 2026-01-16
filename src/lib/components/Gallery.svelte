@@ -5,6 +5,7 @@
 		stats,
 		unsavedTs,
 		currentCacheSize,
+		indexedDbCacheSize,
 		selections,
 		getFrameSelection,
 		setFrameSelection,
@@ -13,6 +14,7 @@
 		batchSave,
 		clearCache,
 		getPng,
+		putPng,
 		cacheWarning,
 		scanProject,
 		loadPersistedTiltSeries,
@@ -522,6 +524,8 @@
 				);
 				if (response.ok) {
 					const blob = await response.blob();
+					// 缓存到存储
+					await putPng(params.tsId, params.zIndex, blob, 8, 90);
 					const url = URL.createObjectURL(blob);
 					currentUrl = url;
 					node.src = url;
@@ -811,6 +815,9 @@
 					title="PNG cache usage"
 				>
 					⚡ {Math.round($currentCacheSize / 1024 / 1024)} MB
+					{#if $indexedDbCacheSize > 0}
+						/ {Math.round($indexedDbCacheSize / 1024 / 1024)} MB
+					{/if}
 					{#if cacheWarningState.evictionNeeded}
 						&nbsp;⚠ LRU
 					{/if}

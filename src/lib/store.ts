@@ -147,11 +147,11 @@ export async function getPng(
 			const store = transaction.objectStore(STORE_NAME);
 			const request = store.get(key);
 
-			request.onsuccess = () => {
+			request.onsuccess = async () => {
 				if (request.result) {
 					const data = request.result as Blob;
-					// 存入内存缓存
-					putPngToMemory(key, data);
+					// 存入内存缓存（等待完成）
+					await putPngToMemory(key, data);
 					resolve(data);
 				} else {
 					resolve(null);
@@ -207,49 +207,29 @@ async function checkIndexedDbQuota(newItemSize: number): Promise<void> {
 	// 需要驱逐：从 IndexedDB 中删除最旧的项（不在内存中的优先）
 	try {
 		const database = await initDB();
-		const transaction = database.transaction([STORE_NAME], 'readwrite');
-		const store = transaction.objectStore(STORE_NAME);
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([STORE_NAME], 'readwrite');
+			const store = transaction.objectStore(STORE_NAME);
 
-		// 获取所有键
-		const getAllKeys = store.getAllKeys();
-		getAllKeys.onsuccess = () => {
-			const keys = getAllKeys.result as string[];
+			// 获取所有键
+			const getAllKeys = store.getAllKeys();
+			getAllKeys.onsuccess = () => {
+				const keys = getAllKeys.result as string[];
 
-			// 优先删除不在内存中的项（最不活跃）
-			const keysNotInMemory = keys.filter((key) => !memoryCache.has(key));
+				// 优先删除不在内存中的项（最不活跃）
+				const keysNotInMemory = keys.filter((key) => !memoryCache.has(key));
 
-			// 按访问时间排序（通过键的最后修改时间，这里简化为按顺序）
-			let spaceNeeded = currentSize + newItemSize - MAX_INDEXEDDB_CACHE;
-			let deletedCount = 0;
+				// 按访问时间排序（通过键的最后修改时间，这里简化为按顺序）
+				let spaceNeeded = currentSize + newItemSize - MAX_INDEXEDDB_CACHE;
+				let deletedCount = 0;
 
-			for (const key of keysNotInMemory) {
-				if (spaceNeeded <= 0) break;
+				// 使用 Promise 来等待所有删除操作完成
+				const deletePromises: Promise<void>[] = [];
 
-				// 获取项的大小
-				const getRequest = store.get(key);
-				getRequest.onsuccess = () => {
-					const blob = getRequest.result as Blob;
-					if (blob) {
-						store.delete(key);
-						spaceNeeded -= blob.size;
-						deletedCount++;
-					}
-				};
-			}
-
-			// 如果删除不在内存中的项还不够，继续删除在内存中的项
-			if (spaceNeeded > 0) {
-				const keysInMemory = keys.filter((key) => memoryCache.has(key));
-				// 按内存缓存中的时间戳排序（最旧的优先）
-				const sortedKeys = keysInMemory.sort((a, b) => {
-					const itemA = memoryCache.get(a);
-					const itemB = memoryCache.get(b);
-					return (itemA?.timestamp || 0) - (itemB?.timestamp || 0);
-				});
-
-				for (const key of sortedKeys) {
+				for (const key of keysNotInMemory) {
 					if (spaceNeeded <= 0) break;
 
+					// 获取项的大小
 					const getRequest = store.get(key);
 					getRequest.onsuccess = () => {
 						const blob = getRequest.result as Blob;
@@ -260,15 +240,47 @@ async function checkIndexedDbQuota(newItemSize: number): Promise<void> {
 						}
 					};
 				}
-			}
 
-			transaction.oncomplete = () => {
-				if (deletedCount > 0) {
-					console.log(`IndexedDB quota eviction: removed ${deletedCount} items`);
-					updateIndexedDbSize();
+				// 如果删除不在内存中的项还不够，继续删除在内存中的项
+				if (spaceNeeded > 0) {
+					const keysInMemory = keys.filter((key) => memoryCache.has(key));
+					// 按内存缓存中的时间戳排序（最旧的优先）
+					const sortedKeys = keysInMemory.sort((a, b) => {
+						const itemA = memoryCache.get(a);
+						const itemB = memoryCache.get(b);
+						return (itemA?.timestamp || 0) - (itemB?.timestamp || 0);
+					});
+
+					for (const key of sortedKeys) {
+						if (spaceNeeded <= 0) break;
+
+						const getRequest = store.get(key);
+						getRequest.onsuccess = () => {
+							const blob = getRequest.result as Blob;
+							if (blob) {
+								store.delete(key);
+								spaceNeeded -= blob.size;
+								deletedCount++;
+							}
+						};
+					}
 				}
+
+				transaction.oncomplete = () => {
+					if (deletedCount > 0) {
+						console.log(`IndexedDB quota eviction: removed ${deletedCount} items`);
+						updateIndexedDbSize().catch((e) => {
+							console.error('Failed to update IndexedDB size after eviction:', e);
+						});
+					}
+					resolve();
+				};
+
+				transaction.onerror = () => reject(transaction.error);
 			};
-		};
+
+			getAllKeys.onerror = () => reject(getAllKeys.error);
+		});
 	} catch (e) {
 		console.error('Failed to check IndexedDB quota:', e);
 	}
@@ -299,22 +311,26 @@ async function updateIndexedDbSize(): Promise<void> {
 // 存入 IndexedDB
 async function putToIndexedDB(key: string, data: Blob): Promise<void> {
 	try {
+		// 先检查配额，如果需要则驱逐（等待完成）
+		await checkIndexedDbQuota(data.size).catch((e) => {
+			console.error('Failed to check IndexedDB quota:', e);
+		});
+
 		const database = await initDB();
 		return new Promise((resolve, reject) => {
 			const transaction = database.transaction([STORE_NAME], 'readwrite');
 			const store = transaction.objectStore(STORE_NAME);
 
-			// 先检查配额，如果需要则驱逐
-			checkIndexedDbQuota(data.size).catch((e) => {
-				console.error('Failed to check IndexedDB quota:', e);
-			});
-
 			const request = store.put(data, key);
 
 			request.onsuccess = () => {
-				// 更新 IndexedDB 大小
-				updateIndexedDbSize();
-				resolve();
+				// 更新 IndexedDB 大小（等待完成）
+				updateIndexedDbSize()
+					.then(() => resolve())
+					.catch((e) => {
+						console.error('Failed to update IndexedDB size:', e);
+						resolve(); // 即使更新大小失败也继续
+					});
 			};
 			request.onerror = () => reject(request.error);
 		});
@@ -420,28 +436,38 @@ export async function clearCacheForTs(tsId: string): Promise<void> {
 	// 清除 IndexedDB 中该 TS 的所有帧（用户显式操作）
 	try {
 		const database = await initDB();
-		const transaction = database.transaction([STORE_NAME], 'readwrite');
-		const store = transaction.objectStore(STORE_NAME);
+		return new Promise((resolve, reject) => {
+			const transaction = database.transaction([STORE_NAME], 'readwrite');
+			const store = transaction.objectStore(STORE_NAME);
 
-		// Get all keys and delete ones for this TS
-		const getAllKeys = store.getAllKeys();
-		getAllKeys.onsuccess = () => {
-			const keys = getAllKeys.result as string[];
-			let deletedCount = 0;
-			keys.forEach((key) => {
-				if (key.startsWith(tsId + '_')) {
-					store.delete(key);
-					deletedCount++;
+			// Get all keys and delete ones for this TS
+			const getAllKeys = store.getAllKeys();
+			getAllKeys.onsuccess = () => {
+				const keys = getAllKeys.result as string[];
+				const keysToDelete = keys.filter((key) => key.startsWith(tsId + '_'));
+
+				if (keysToDelete.length === 0) {
+					resolve();
+					return;
 				}
-			});
 
-			// 如果有删除，更新 IndexedDB 大小
-			if (deletedCount > 0) {
+				// Delete all matching keys
+				keysToDelete.forEach((key) => {
+					store.delete(key);
+				});
+
+				// Update IndexedDB size after all deletions complete
 				transaction.oncomplete = () => {
-					updateIndexedDbSize();
+					updateIndexedDbSize()
+						.then(() => resolve())
+						.catch((e) => {
+							console.error('Failed to update IndexedDB size:', e);
+							resolve(); // Continue even if update fails
+						});
 				};
-			}
-		};
+			};
+			getAllKeys.onerror = () => reject(getAllKeys.error);
+		});
 	} catch (e) {
 		console.error('Failed to clear cache for TS:', e);
 	}
