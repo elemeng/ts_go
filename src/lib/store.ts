@@ -497,10 +497,10 @@ export async function cacheAll(
 	}
 
 	let cached = 0;
-	const CONCURRENT_LIMIT = 10; // 同时处理的帧数限制
+	const CONCURRENT_LIMIT = 20; // 同时处理的帧数限制
 
 	// 处理单个帧
-	const processFrame = async (ts: TiltSeries, frame: Frame): Promise<void> => {
+	const processFrame = async (ts: TiltSeries, frame: Frame, frameIndex: number): Promise<void> => {
 		try {
 			// 尝试获取 PNG，如果不存在则会从后端获取
 			const png = await getPng(ts.id, frame.zIndex, 8, 90);
@@ -514,11 +514,10 @@ export async function cacheAll(
 			console.error(`Failed to cache PNG for ${ts.id}/${frame.zIndex}:`, e);
 			failed++;
 		} finally {
-			cached++;
-			// 报告进度
+			// Use frameIndex for atomic progress tracking instead of shared counter
 			if (onProgress) {
 				onProgress({
-					cached,
+					cached: frameIndex + 1,
 					total,
 					currentTs: ts.id,
 					currentFrame: frame.zIndex
@@ -528,11 +527,15 @@ export async function cacheAll(
 	};
 
 	// 并行处理所有帧
+	let globalFrameIndex = 0;
 	for (const ts of allSeries) {
 		// 将帧分成批次，每批最多 CONCURRENT_LIMIT 个
 		for (let i = 0; i < ts.frames.length; i += CONCURRENT_LIMIT) {
 			const batch = ts.frames.slice(i, i + CONCURRENT_LIMIT);
-			await Promise.all(batch.map((frame) => processFrame(ts, frame)));
+			await Promise.all(batch.map((frame) => {
+				const frameIndex = globalFrameIndex++;
+				return processFrame(ts, frame, frameIndex);
+			}));
 		}
 	}
 
