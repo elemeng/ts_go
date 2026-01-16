@@ -29,7 +29,7 @@ def write_mdoc_with_selections(
 	if not mdoc_path.exists():
 		raise HTTPException(status_code=404, detail=f"mdoc file not found: {mdoc_path}")
 
-	# Create backup
+	# Create backup ONLY if it doesn't exist (preserve original backup)
 	backup = None
 	if backup_path:
 		backup = Path(backup_path)
@@ -37,7 +37,9 @@ def write_mdoc_with_selections(
 		backup = mdoc_path.with_suffix('.mdoc.bak')
 
 	import shutil
-	shutil.copy2(mdoc_path, backup)
+	# Only create backup if it doesn't already exist
+	if not backup.exists():
+		shutil.copy2(mdoc_path, backup)
 
 	try:
 		# Read and modify mdoc
@@ -100,11 +102,19 @@ def write_mdoc_with_selections(
 		# Combine header and modified frames
 		final_lines = header_lines + modified_lines
 
-		# Write modified mdoc
-		with open(mdoc_path, 'w') as f:
+		# Write to temp file first for atomic operation
+		temp_path = mdoc_path.with_suffix('.mdoc.tmp')
+		with open(temp_path, 'w') as f:
 			f.writelines(final_lines)
+
+		# Atomic rename (overwrite original)
+		temp_path.replace(mdoc_path)
 
 		return str(backup)
 
 	except Exception as e:
+		# Clean up temp file if it exists
+		temp_path = mdoc_path.with_suffix('.mdoc.tmp')
+		if temp_path.exists():
+			temp_path.unlink()
 		raise HTTPException(status_code=409, detail=f"Failed to write mdoc: {str(e)}")

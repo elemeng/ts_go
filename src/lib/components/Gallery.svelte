@@ -400,7 +400,8 @@
 			const updatedTiltSeriesList: TiltSeries[] = [];
 			const deletedTsIds: Set<string> = new Set();
 
-			for (const ts of $tiltSeries) {
+			// Process all tilt series in parallel for speed
+			const savePromises = $tiltSeries.map(async (ts) => {
 				const isSelectedTs = selectedTsIds.has(ts.id);
 
 				if (isSelectedTs) {
@@ -413,15 +414,13 @@
 					if (tsSelections.size > 0) {
 						try {
 							const updatedTs = await batchSave(ts.mdocPath, tsSelections);
-							if (updatedTs) {
-								updatedTiltSeriesList.push(updatedTs);
-							}
-							savedCount++;
+							return { type: 'saved', ts, updatedTs };
 						} catch (e) {
 							console.error(`Failed to save ${ts.mdocPath}:`, e);
 							toastStore.error(
 								`Failed to save ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
 							);
+							return { type: 'error', ts, error: e };
 						}
 					}
 				} else {
@@ -435,19 +434,37 @@
 
 						if (response.ok) {
 							await response.json();
-							deletedCount++;
-							deletedTsIds.add(ts.id);
+							return { type: 'deleted', ts };
 						} else {
 							const error = await response.text();
 							console.error(`Failed to backup-delete ${ts.mdocPath}: ${error}`);
 							toastStore.error(`Failed to delete ${ts.id}: ${error}`);
+							return { type: 'error', ts, error };
 						}
 					} catch (e) {
 						console.error(`Error processing ${ts.mdocPath}:`, e);
 						toastStore.error(
 							`Error processing ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
 						);
+						return { type: 'error', ts, error: e };
 					}
+				}
+				return null;
+			});
+
+			// Wait for all saves to complete
+			const results = await Promise.all(savePromises);
+
+			// Process results
+			for (const result of results) {
+				if (!result) continue;
+
+				if (result.type === 'saved' && result.updatedTs) {
+					updatedTiltSeriesList.push(result.updatedTs);
+					savedCount++;
+				} else if (result.type === 'deleted') {
+					deletedTsIds.add(result.ts.id);
+					deletedCount++;
 				}
 			}
 
