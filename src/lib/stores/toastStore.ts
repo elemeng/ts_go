@@ -19,13 +19,13 @@ function createToastStore() {
 		const id = `toast-${++toastId}`;
 		const newToast = { ...toast, id };
 
-		update(toasts => [...toasts, newToast]);
+		update((toasts) => [...toasts, newToast]);
 
 		return id;
 	}
 
 	function remove(id: string) {
-		update(toasts => toasts.filter(t => t.id !== id));
+		update((toasts) => toasts.filter((t) => t.id !== id));
 	}
 
 	function clear() {

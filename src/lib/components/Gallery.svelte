@@ -17,7 +17,10 @@
 		scanProject,
 		loadPersistedTiltSeries,
 		userHome,
-		fetchUserHome
+		fetchUserHome,
+		cacheAll,
+		refreshCache,
+		deleteCache
 	} from '$lib/store';
 	import { toastStore } from '$lib/stores/toastStore';
 	import type { TiltSeries, Frame } from '$lib/types';
@@ -37,6 +40,11 @@
 	let selectedTsIds = $state(new Set<string>()); // For batch operations
 	let selectionsStore = $state<SelectionState>(new Map());
 	let thumbSize = $state(128); // 缩略图宽度（像素）
+
+	// Cache management state
+	let isCachingAll = $state(false);
+	let isRefreshingCache = $state(false);
+	let isDeletingCache = $state(false);
 
 	// Scan Project state
 	// API 基础 URL - from .env file
@@ -402,7 +410,9 @@
 							savedCount++;
 						} catch (e) {
 							console.error(`Failed to save ${ts.mdocPath}:`, e);
-							toastStore.error(`Failed to save ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+							toastStore.error(
+								`Failed to save ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
+							);
 						}
 					}
 				} else {
@@ -425,7 +435,9 @@
 						}
 					} catch (e) {
 						console.error(`Error processing ${ts.mdocPath}:`, e);
-						toastStore.error(`Error processing ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+						toastStore.error(
+							`Error processing ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
+						);
 					}
 				}
 			}
@@ -634,6 +646,59 @@
 		}
 	}
 
+	// Cache management handlers
+	async function handleCacheAll() {
+		if ($tiltSeries.length === 0) {
+			toastStore.warning('No tilt series loaded', 'Scan a project first');
+			return;
+		}
+
+		isCachingAll = true;
+		try {
+			const result = await cacheAll();
+			toastStore.success(
+				`Cache complete: ${result.success}/${result.total} PNGs cached`,
+				`${result.failed} failed`
+			);
+		} catch (e) {
+			toastStore.error(`Cache failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+		} finally {
+			isCachingAll = false;
+		}
+	}
+
+	async function handleRefreshCache() {
+		if ($tiltSeries.length === 0) {
+			toastStore.warning('No tilt series loaded', 'Scan a project first');
+			return;
+		}
+
+		isRefreshingCache = true;
+		try {
+			const result = await refreshCache();
+			toastStore.success(
+				`Cache refreshed: ${result.success}/${result.total} PNGs synced`,
+				`${result.failed} failed`
+			);
+		} catch (e) {
+			toastStore.error(`Refresh failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+		} finally {
+			isRefreshingCache = false;
+		}
+	}
+
+	async function handleDeleteCache() {
+		isDeletingCache = true;
+		try {
+			await deleteCache();
+			toastStore.success('All cached PNGs deleted');
+		} catch (e) {
+			toastStore.error(`Delete failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+		} finally {
+			isDeletingCache = false;
+		}
+	}
+
 	// Intersection Observer for lazy loading
 	function intersectionObserver(node: HTMLDivElement, params: { tsId: string; zIndex: number }) {
 		const observer = new IntersectionObserver(
@@ -737,9 +802,46 @@
 					{/if}
 				</div>
 
-				<button class="btn btn-ghost btn-sm" onclick={() => clearCache()} title="Clear PNG cache">
-					🗑
-				</button>
+				<!-- Cache management dropdown -->
+				<div class="dropdown dropdown-end">
+					<div tabindex="0" role="button" class="btn btn-ghost btn-sm" title="Cache management">
+						💾 Cache
+					</div>
+					<ul class="dropdown-content menu z-[1] w-52 rounded-box bg-base-100 p-2 shadow-lg">
+						<li>
+							<button onclick={handleCacheAll} disabled={isCachingAll} class="flex justify-between">
+								<span>📦 Cache All</span>
+								{#if isCachingAll}
+									<span class="loading loading-xs loading-spinner"></span>
+								{/if}
+							</button>
+						</li>
+						<li>
+							<button
+								onclick={handleRefreshCache}
+								disabled={isRefreshingCache}
+								class="flex justify-between"
+							>
+								<span>🔄 Refresh Cache</span>
+								{#if isRefreshingCache}
+									<span class="loading loading-xs loading-spinner"></span>
+								{/if}
+							</button>
+						</li>
+						<li>
+							<button
+								onclick={handleDeleteCache}
+								disabled={isDeletingCache}
+								class="flex justify-between"
+							>
+								<span>🗑 Delete Cache</span>
+								{#if isDeletingCache}
+									<span class="loading loading-xs loading-spinner"></span>
+								{/if}
+							</button>
+						</li>
+					</ul>
+				</div>
 
 				<button class="btn btn-sm btn-primary" onclick={handleSaveAll} disabled={isSavingAll}>
 					{#if isSavingAll}

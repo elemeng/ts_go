@@ -17,16 +17,16 @@ Built with **SvelteKit + DaisyUI** on the frontend and **FastAPI** on the backen
 
 ## ✨ Features
 
-* **🔍 Tilt Series Curation**
+- **🔍 Tilt Series Curation**
   Browse, inspect, and curate Cryo-ET tilt series interactively.
 
-* **🧠 Frame-level Selection**
+- **🧠 Frame-level Selection**
   Select, invert, batch-apply, and persist frame selections.
 
-* **🚀 Modern UI**
+- **🚀 Modern UI**
   Clean, responsive UI powered by DaisyUI + TailwindCSS.
 
-* **⚡ High Performance**
+- **⚡ High Performance**
   PNG caching, lazy loading, and efficient image encoding.
 
 ---
@@ -37,11 +37,11 @@ Built with **SvelteKit + DaisyUI** on the frontend and **FastAPI** on the backen
 
 #### System Requirements
 
-* **Node.js** 18+
-* **Python** 3.12+
-* **bun** – frontend package manager
+- **Node.js** 18+
+- **Python** 3.12+
+- **bun** – frontend package manager
   [https://bun.sh](https://bun.sh)
-* **uv** – Python dependency & virtual environment manager
+- **uv** – Python dependency & virtual environment manager
   [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)
 
 > ⚠️ `deploy.sh` will **auto-check and install project dependencies**, but system tools (`bun`, `uv`, `python`) must already be installed.
@@ -61,11 +61,11 @@ cd ts_go
 
 This project ships with a **single-file smart launcher** that manages:
 
-* Frontend & backend processes
-* Dependency installation
-* Virtual environments (via `uv`)
-* Safe restarts & shutdowns
-* Logs and status inspection
+- Frontend & backend processes
+- Dependency installation
+- Virtual environments (via `uv`)
+- Safe restarts & shutdowns
+- Logs and status inspection
 
 ### Show Help
 
@@ -110,10 +110,10 @@ sh deploy.sh start
 
 This will:
 
-* Install frontend dependencies (via `bun`)
-* Sync backend dependencies (via `uv`)
-* Start backend API
-* Start frontend Web UI
+- Install frontend dependencies (via `bun`)
+- Sync backend dependencies (via `uv`)
+- Start backend API
+- Start frontend Web UI
 
 ---
 
@@ -127,10 +127,10 @@ http://localhost:5173
 
 This is the **CryoET Tilt Series Viewer Web Interface**, where you can:
 
-* Browse tilt series
-* Inspect frames and angles
-* Perform batch selections
-* Apply and save curation results
+- Browse tilt series
+- Inspect frames and angles
+- Perform batch selections
+- Apply and save curation results
 
 ---
 
@@ -257,15 +257,15 @@ ts_go/
 
 ### Frontend
 
-* `svelte.config.js` – SvelteKit configuration
-* `vite.config.ts` – Vite build configuration
-* `tailwind.config.js` – TailwindCSS & DaisyUI
-* `playwright.config.ts` – E2E tests
+- `svelte.config.js` – SvelteKit configuration
+- `vite.config.ts` – Vite build configuration
+- `tailwind.config.js` – TailwindCSS & DaisyUI
+- `playwright.config.ts` – E2E tests
 
 ### Backend
 
-* `pyproject.toml` – Python dependencies
-* `uv.lock` – Locked dependency graph (reproducible builds)
+- `pyproject.toml` – Python dependencies
+- `uv.lock` – Locked dependency graph (reproducible builds)
 
 ---
 
@@ -309,12 +309,12 @@ This project is licensed under the **MIT License**. See the [LICENSE](https://gi
 
 ## 🙏 Acknowledgments
 
-* [SvelteKit](https://kit.svelte.dev/)
-* [FastAPI](https://fastapi.tiangolo.com/)
-* [DaisyUI](https://daisyui.com/)
-* [TailwindCSS](https://tailwindcss.com/)
-* [MDOC File](https://github.com/teamtomo/mdocfile)
-* [MRC File](https://github.com/ccpem/mrcfile)
+- [SvelteKit](https://kit.svelte.dev/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [DaisyUI](https://daisyui.com/)
+- [TailwindCSS](https://tailwindcss.com/)
+- [MDOC File](https://github.com/teamtomo/mdocfile)
+- [MRC File](https://github.com/ccpem/mrcfile)
 
 ---
 
