@@ -527,7 +527,7 @@
 	// Note: fetchUserHome is now imported from store.ts
 
 	async function handleScan() {
-		console.log('handleScan called with config:', scanConfig);
+		console.log('handleScan called with config:', $state.snapshot(scanConfig));
 		isScanning = true;
 		scanError = null;
 
