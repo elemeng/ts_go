@@ -37,7 +37,9 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
         if bin not in [1, 2, 4, 8]:
             raise HTTPException(status_code=400, detail="bin must be 1, 2, 4, or 8")
         if quality < 1 or quality > 100:
-            raise HTTPException(status_code=400, detail="quality must be between 1 and 100")
+            raise HTTPException(
+                status_code=400, detail="quality must be between 1 and 100"
+            )
 
         task_key = (ts_id, frame_id, bin, quality)
 
@@ -60,7 +62,7 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
             # Check disk cache
             png_path = get_png_path(ts_id, frame_id, bin, quality)
             if png_path.exists():
-                with open(png_path, 'rb') as f:
+                with open(png_path, "rb") as f:
                     data = f.read()
                 png_cache.put(ts_id, frame_id, bin, quality, data)
                 future.set_result(Response(content=data, media_type="image/png"))
@@ -69,7 +71,9 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
             # Generate PNG
             ts = project_state.get_tilt_series(ts_id)
             if not ts:
-                raise HTTPException(status_code=404, detail=f"Tilt series not found: {ts_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"Tilt series not found: {ts_id}"
+                )
 
             # Find frame
             frame = None
@@ -79,19 +83,29 @@ async def get_preview(ts_id: str, frame_id: int, bin: int = 8, quality: int = 90
                     break
 
             if not frame:
-                raise HTTPException(status_code=404, detail=f"Frame not found: {frame_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"Frame not found: {frame_id}"
+                )
 
             # Read raw image
             img = read_image(frame.mrcPath)
             if img is None:
-                raise HTTPException(status_code=404, detail=f"Failed to read image: {frame.mrcPath}")
+                raise HTTPException(
+                    status_code=404, detail=f"Failed to read image: {frame.mrcPath}"
+                )
 
             # Bin if needed
             if bin > 1:
                 img = bin_ndarray(img, bin)
 
             # Apply autocontrast
-            img = autocontrast_minmax(img)
+            img = autocontrast_minmax(
+                img,
+                lower_percentile=0.1,
+                upper_percentile=99.9,
+                gamma=0.75,  # Slight boost for low-contrast proteins
+                bg_subtract=True,
+            )
 
             # Save to disk
             save_png(img, str(png_path), quality)
