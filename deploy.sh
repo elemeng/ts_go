@@ -20,7 +20,7 @@ readonly LOGS_DIR="$PROJECT_ROOT/logs"
 # Service configuration
 readonly FRONTEND_PORT=${FRONTEND_PORT:-5173}
 readonly BACKEND_PORT=${BACKEND_PORT:-8000}
-readonly FRONTEND_HOST=${FRONTEND_HOST:-localhost}
+readonly FRONTEND_HOST=${FRONTEND_HOST:-0.0.0.0}
 readonly BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 
 # Runtime files
@@ -147,7 +147,7 @@ start_frontend() {
     fi
     
     ensure_directories
-    nohup bun run dev > "$FRONTEND_LOG" 2>&1 &
+    nohup bun run dev --host "$FRONTEND_HOST" > "$FRONTEND_LOG" 2>&1 &
     local pid=$!
     
     # Verify process started
