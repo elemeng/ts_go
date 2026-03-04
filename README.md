@@ -1,9 +1,3 @@
-Here is a **complete, polished, copy-paste ready README.md**, with **everything included**, including **clear Web UI access instructions**, consistent tooling (`bun + uv`), and no missing steps.
-
-You can drop this in directly as `README.md`.
-
----
-
 # 🧊 CryoET Tilt Series Viewer
 
 A modern, full-stack web application for **Cryo-ET tilt series filtering, inspection, and visualization**.
@@ -131,8 +125,23 @@ This is the **CryoET Tilt Series Viewer Web Interface**, where you can:
 - Inspect frames and angles
 - Perform batch selections
 - Apply and save curation results
-
 ---
+
+### 🌐 Remote Access & WSL
+
+**GPU Cluster / Remote Server:**  
+When deploying on a remote GPU cluster and accessing from your local desktop:
+
+Then access via the server's IP:
+```
+http://<server-ip>:5173
+```
+IF failed, check if backend/frontend are runing! IF true, check if Firewall allows ports for frontend/backend (default: `5173` and `8000`) 
+
+**WSL2 Specific Notes:**
+- **From Windows browser (same machine)**: `http://localhost:5173` works directly (Windows auto-forwards to WSL)
+- **From another PC on the network**: Use the **Windows host IP address** (`http://<windows-ip>:5173`), not `localhost`.  
+  > ⚠️ Ensure Windows Firewall allows inbound connections on ports `5173` and `8000`, and that your backend/frontend are bound to `0.0.0.0` as shown above.
 
 ### 🔁 Custom Ports
 
