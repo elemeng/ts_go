@@ -1,4 +1,4 @@
-# 🧊 CryoET Tilt Series Viewer
+# 🧊 CryoET Tilt Series Curator
 
 A modern, full-stack web application for **Cryo-ET tilt series filtering, inspection, and visualization**.
 Built with **SvelteKit + DaisyUI** on the frontend and **FastAPI** on the backend.
