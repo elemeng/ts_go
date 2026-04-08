@@ -11,8 +11,7 @@
 		setFrameSelection,
 		setBatchSelection,
 		clearTsSelections,
-		batchSave,
-		clearCache,
+		saveAll,
 		getPngDeduped,
 		cacheWarning,
 		scanProject,
@@ -316,20 +315,6 @@
 		toastStore.success(`Applied ${preset} filter`, `${ts.id}`, 1500);
 	}
 
-	// 应用更改
-	function applyChanges(ts: TiltSeries) {
-		console.log('applyChanges called for', ts.id);
-		const tsSelections = new Map<number, boolean>();
-		// Send ALL selections, not just changes
-		for (const frame of ts.frames) {
-			const selected = isSelected(ts, frame);
-			tsSelections.set(frame.zIndex, selected);
-		}
-		if (tsSelections.size > 0) {
-			batchSave(ts.mdocPath, tsSelections);
-		}
-	}
-
 	// 重置 TS
 	function resetTs(ts: TiltSeries) {
 		console.log('resetTs called for', ts.id);
@@ -364,27 +349,7 @@
 		visibleFrames = newSet;
 	}
 
-	// Clean up all state after save
-	async function cleanupAfterSave() {
-		// Clear localStorage
-		if (typeof localStorage !== 'undefined') {
-			localStorage.removeItem('ts_selections');
-			localStorage.removeItem('ts_tiltSeries');
-			localStorage.removeItem('gallery_expandedTs');
-			localStorage.removeItem('gallery_thumbSize');
-		}
-
-		// Clear memory cache
-		await clearCache();
-
-		// Clear frontend state
-		selections.set(new Map());
-		expandedTs = new Set();
-		visibleFrames = new Set();
-		loadedPngFrames = new Set();
-	}
-
-	// Save All 功能
+	// Save All 功能 - Simple: frontend sends selections hashmap, backend writes to disk
 	async function handleSaveAll() {
 		isSavingAll = true;
 		saveAllError = null;
@@ -395,115 +360,44 @@
 				return;
 			}
 
-			let savedCount = 0;
-			let deletedCount = 0;
-			const updatedTiltSeriesList: TiltSeries[] = [];
+			// Build delete list (mdocs not selected for save)
+			const deletePaths: string[] = [];
 			const deletedTsIds: Set<string> = new Set();
 
-			// Process all tilt series in parallel for speed
-			const savePromises = $tiltSeries.map(async (ts) => {
-				const isSelectedTs = selectedTsIds.has(ts.id);
-
-				if (isSelectedTs) {
-					// TS is selected: save with frame selections
-					const tsSelections = new Map<number, boolean>();
-					for (const frame of ts.frames) {
-						const selected = isSelected(ts, frame);
-						tsSelections.set(frame.zIndex, selected);
-					}
-					if (tsSelections.size > 0) {
-						try {
-							const updatedTs = await batchSave(ts.mdocPath, tsSelections);
-							return { type: 'saved', ts, updatedTs };
-						} catch (e) {
-							console.error(`Failed to save ${ts.mdocPath}:`, e);
-							toastStore.error(
-								`Failed to save ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
-							);
-							return { type: 'error', ts, error: e };
-						}
-					}
-				} else {
-					// TS is NOT selected: backup and delete original
-					try {
-						const response = await fetch(`${API_BASE}/api/mdoc/backup-delete`, {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ mdocPath: ts.mdocPath })
-						});
-
-						if (response.ok) {
-							await response.json();
-							return { type: 'deleted', ts };
-						} else {
-							const error = await response.text();
-							console.error(`Failed to backup-delete ${ts.mdocPath}: ${error}`);
-							toastStore.error(`Failed to delete ${ts.id}: ${error}`);
-							return { type: 'error', ts, error };
-						}
-					} catch (e) {
-						console.error(`Error processing ${ts.mdocPath}:`, e);
-						toastStore.error(
-							`Error processing ${ts.id}: ${e instanceof Error ? e.message : 'Unknown error'}`
-						);
-						return { type: 'error', ts, error: e };
-					}
-				}
-				return null;
-			});
-
-			// Wait for all saves to complete
-			const results = await Promise.all(savePromises);
-
-			// Process results
-			for (const result of results) {
-				if (!result) continue;
-
-				if (result.type === 'saved' && result.updatedTs) {
-					updatedTiltSeriesList.push(result.updatedTs);
-					savedCount++;
-				} else if (result.type === 'deleted') {
-					deletedTsIds.add(result.ts.id);
-					deletedCount++;
+			for (const ts of $tiltSeries) {
+				if (!selectedTsIds.has(ts.id)) {
+					deletePaths.push(ts.mdocPath);
+					deletedTsIds.add(ts.id);
 				}
 			}
 
-			// Update tiltSeries store with updated data and remove deleted TS
-			tiltSeries.update((current) => {
-				const updated = current
-					.filter((ts) => !deletedTsIds.has(ts.id))
-					.map((ts) => {
-						const updatedTs = updatedTiltSeriesList.find((uts) => uts.id === ts.id);
-						return updatedTs || ts;
-					});
-				return updated;
-			});
+			if (selectionsStore.size === 0 && deletePaths.length === 0) {
+				toastStore.info('No changes to save');
+				return;
+			}
 
-			toastStore.success(`Saved ${savedCount} tilt series, deleted ${deletedCount} mdocs`);
+			// Call unified saveAll API - sends selections hashmap directly
+			const result = await saveAll(selectionsStore, deletePaths);
 
-			// After successful save, discard localStorage and rescan with same project setup
-			if (savedCount > 0 || deletedCount > 0) {
-				toastStore.info('Refreshing project data...');
+			// Update tiltSeries store - remove deleted TS
+			if (deletedTsIds.size > 0) {
+				tiltSeries.update((current) => {
+					return current.filter((ts) => !deletedTsIds.has(ts.id));
+				});
+			}
 
-				// Preserve original TS IDs before cleanup
-				const originalTsIds = new Set($tiltSeries.map((ts) => ts.id));
+			// Clear all selections after successful save
+			selections.set(new Map());
+			localStorage.removeItem('ts_selections');
 
-				// Clean up all state
-				await cleanupAfterSave();
-
-				// Reset selection to all TS (using preserved IDs)
-				selectedTsIds = originalTsIds;
-
-				// Rescan with same configuration
-				if (scanConfig.mdoc_dir) {
-					try {
-						await handleScan();
-						toastStore.success('Project refreshed successfully');
-					} catch (scanError) {
-						console.error('Failed to rescan:', scanError);
-						toastStore.error('Failed to refresh project data');
-					}
-				}
+			// Report results
+			if (result.failed.length > 0) {
+				toastStore.error(
+					`Saved ${result.saved.length}, deleted ${result.deleted.length}, failed ${result.failed.length}`,
+					`Failed: ${result.failed.slice(0, 3).join(', ')}${result.failed.length > 3 ? '...' : ''}`
+				);
+			} else {
+				toastStore.success(`Saved ${result.saved.length} tilt series, deleted ${result.deleted.length} mdocs`);
 			}
 		} catch (e) {
 			saveAllError = e instanceof Error ? e.message : 'Save failed';
@@ -1025,14 +919,6 @@
 											resetTs(ts);
 										}}
 										title="Reset to original">↺ Reset</button
-									>
-									<button
-										class="btn join-item btn-xs btn-primary"
-										onclick={() => {
-											console.log('Apply button clicked');
-											applyChanges(ts);
-										}}
-										title="Apply changes">✓ Apply</button
 									>
 								</div>
 							</div>

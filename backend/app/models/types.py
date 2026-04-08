@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 
 class Frame(BaseModel):
@@ -134,6 +134,56 @@ class BackupDeleteResponse(BaseModel):
     success: bool
     message: str
     backupPath: Optional[str] = None
+
+
+class BulkSaveRequest(BaseModel):
+    """Request to save multiple mdoc files at once."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
+    saves: List[BatchSaveRequest]
+
+
+class BulkSaveResponse(BaseModel):
+    """Response from bulk save operation."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
+    success: bool
+    savedCount: int
+    failed: List[str] = []
+    message: str
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request to delete multiple mdoc files at once."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
+    mdocPaths: List[str]
+
+
+class BulkDeleteResponse(BaseModel):
+    """Response from bulk delete operation."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=None,
+        use_enum_values=True
+    )
+    
+    success: bool
+    deletedCount: int
+    failed: List[str] = []
+    message: str
 
 
 class PngRequest(BaseModel):

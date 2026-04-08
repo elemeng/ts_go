@@ -768,34 +768,69 @@ export async function fetchPng(tsId: string, zIndex: number, bin = 8, quality = 
 	return blob;
 }
 
-// 批量保存
-export async function batchSave(
-	mdocPath: string,
-	selectionsMap: Map<number, boolean>
-): Promise<TiltSeries | null> {
-	const response = await fetch(`${API_BASE}/api/mdoc/batch-save`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			mdocPath,
-			selections: Object.fromEntries(selectionsMap)
-		})
-	});
+// ==================== SAVE ALL (UNIFIED) ====================
 
-	if (!response.ok) throw new Error('Save failed');
+export interface SaveAllResult {
+	success: boolean;
+	saved: string[];
+	failed: string[];
+	deleted: string[];
+	message: string;
+}
 
-	const data = await response.json();
-
-	// Only clear selections AFTER successful save
-	if (data.success) {
-		// Clear PNG cache for this tilt series
-		await clearCacheForTs(mdocPath);
-		// Clear memory state
-		clearTsSelections(mdocPath);
+/**
+ * Save all mdoc changes in one request.
+ * Sends all selections from frontend (single source of truth) to backend.
+ * Backend writes directly to disk.
+ */
+export async function saveAll(
+	selectionsState: SelectionState,
+	deletePaths?: string[]
+): Promise<SaveAllResult> {
+	// Convert selections Map to plain object for JSON serialization
+	const selectionsPayload: Record<string, Record<number, boolean>> = {};
+	
+	for (const [mdocPath, tsSelections] of selectionsState) {
+		if (tsSelections.size > 0) {
+			selectionsPayload[mdocPath] = Object.fromEntries(tsSelections);
+		}
 	}
 
-	// 返回更新后的 tiltSeries 数据
-	return data.updatedTiltSeries || null;
+	// Send save request
+	const response = await fetch(`${API_BASE}/api/mdoc/save-all`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ selections: selectionsPayload })
+	});
+
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Save all failed: ${errorText}`);
+	}
+
+	const saveResult = await response.json();
+
+	// Handle deletions if any
+	let deleteResult = { deleted: [] as string[], failed: [] as string[] };
+	if (deletePaths && deletePaths.length > 0) {
+		const deleteResponse = await fetch(`${API_BASE}/api/mdoc/delete-all`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ mdocPaths: deletePaths })
+		});
+		
+		if (deleteResponse.ok) {
+			deleteResult = await deleteResponse.json();
+		}
+	}
+
+	return {
+		success: saveResult.success && deleteResult.failed?.length === 0,
+		saved: saveResult.saved || [],
+		failed: [...(saveResult.failed || []), ...(deleteResult.failed || [])],
+		deleted: deleteResult.deleted || [],
+		message: saveResult.message
+	};
 }
 
 // ==================== 派生状态 ====================
