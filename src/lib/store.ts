@@ -9,9 +9,6 @@ const API_BASE = import.meta.env.VITE_API_BASE;
 // User home directory
 export const userHome = writable<string>('');
 
-// Track in-flight PNG fetches to prevent duplicates
-const inFlightFetches = new Map<string, Promise<Blob>>();
-
 // Get user home directory from environment
 export function getUserHome(): string {
 	if (typeof window !== 'undefined' && window.process?.env?.HOME) {
@@ -66,7 +63,7 @@ if (typeof localStorage !== 'undefined') {
 	});
 }
 
-// 选择状态
+// 选择状态 (Single Source of Truth for selections)
 export const selections = writable<SelectionState>(new Map());
 export const selectionsStore = derived(selections, ($selections) => $selections);
 
@@ -74,6 +71,7 @@ export const selectionsStore = derived(selections, ($selections) => $selections)
 const MAX_MEMORY_CACHE = 2 * 1024 * 1024 * 1024; // 2GB
 const MAX_INDEXEDDB_CACHE = 10 * 1024 * 1024 * 1024; // 10GB
 const memoryCache = new Map<string, PngCacheItem>();
+
 // 导出缓存大小供组件使用
 export const currentCacheSize = writable(0);
 export const indexedDbCacheSize = writable(0);
@@ -90,11 +88,8 @@ export const cacheWarning = derived(
 const DB_NAME = 'TsSvCache';
 const DB_VERSION = 1;
 const STORE_NAME = 'pngs';
-const MAX_DB_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
 
 let db: IDBDatabase | null = null;
-
-// ==================== 辅助函数 ====================
 
 // 初始化 IndexedDB
 async function initDB(): Promise<IDBDatabase> {
@@ -123,9 +118,9 @@ function cacheKey(tsId: string, zIndex: number, bin = 8, quality = 90): string {
 	return `${tsId}_${zIndex}_bin${bin}_q${quality}`;
 }
 
-// ==================== PNG 缓存操作 ====================
+// ==================== PNG 缓存操作 (Simplified) ====================
 
-// 获取 PNG
+// 获取 PNG (simple version, no dedup)
 export async function getPng(
 	tsId: string,
 	zIndex: number,
@@ -137,7 +132,6 @@ export async function getPng(
 	// 1. 检查内存缓存
 	const memCached = memoryCache.get(key);
 	if (memCached) {
-		// 更新访问时间
 		memCached.timestamp = Date.now();
 		return memCached.data;
 	}
@@ -153,7 +147,6 @@ export async function getPng(
 			request.onsuccess = async () => {
 				if (request.result) {
 					const data = request.result as Blob;
-					// 存入内存缓存（等待完成）
 					await putPngToMemory(key, data);
 					resolve(data);
 				} else {
@@ -169,164 +162,57 @@ export async function getPng(
 	return null;
 }
 
-// 获取 PNG（带去重，用于防止 cacheAll 和 lazy loading 重复请求）
-export async function getPngDeduped(
-	tsId: string,
-	zIndex: number,
-	bin = 8,
-	quality = 90
-): Promise<Blob> {
-	const key = cacheKey(tsId, zIndex, bin, quality);
-
-	// 检查是否已有相同的请求在进行中
-	if (inFlightFetches.has(key)) {
-		console.log(`[getPngDeduped] Waiting for existing fetch: ${key}`);
-		return inFlightFetches.get(key)!;
-	}
-
-	// 创建新的 fetch promise
-	const fetchPromise = (async () => {
-		try {
-			// 先尝试从缓存获取
-			const cached = await getPng(tsId, zIndex, bin, quality);
-			if (cached) {
-				console.log(`[getPngDeduped] Cache hit: ${key}`);
-				return cached;
-			}
-
-			// 缓存未命中，从后端获取
-			console.log(`[getPngDeduped] Cache miss, fetching: ${key}`);
-			const blob = await fetchPng(tsId, zIndex, bin, quality);
-			return blob;
-		} finally {
-			// 清除 in-flight 记录
-			inFlightFetches.delete(key);
-		}
+// 存入内存缓存
+async function putPngToMemory(key: string, data: Blob): Promise<void> {
+	const size = data.size;
+	const item: PngCacheItem = { data, size: size, timestamp: Date.now() };
+	let cacheSize = 0;
+	currentCacheSize.subscribe((n) => {
+		cacheSize = n;
 	})();
 
-	// 记录到 in-flight map
-	inFlightFetches.set(key, fetchPromise);
+	// 检查是否已存在
+	if (memoryCache.has(key)) {
+		const existingSize = memoryCache.get(key)!.size;
+		currentCacheSize.update((n) => n - existingSize);
+		memoryCache.delete(key);
+		cacheSize -= existingSize;
+	}
 
-	return fetchPromise;
+	// LRU 淘汰
+	while (cacheSize + size > MAX_MEMORY_CACHE && memoryCache.size > 0) {
+		const oldestKey = memoryCache.keys().next().value;
+		if (!oldestKey) break;
+		const oldest = memoryCache.get(oldestKey)!;
+		currentCacheSize.update((n) => n - oldest.size);
+		memoryCache.delete(oldestKey);
+		cacheSize -= oldest.size;
+	}
+
+	memoryCache.set(key, item);
+	currentCacheSize.update((n) => n + size);
+
+	// 同步到 IndexedDB
+	await putToIndexedDB(key, data);
 }
 
-// ==================== IndexedDB 辅助函数 ====================
-
-// 从 IndexedDB 删除指定 key（用于用户显式删除或配额驱逐）
-async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota' = 'user'): Promise<void> {
+// 存入 IndexedDB
+async function putToIndexedDB(key: string, data: Blob): Promise<void> {
 	try {
 		const database = await initDB();
 		return new Promise((resolve, reject) => {
 			const transaction = database.transaction([STORE_NAME], 'readwrite');
 			const store = transaction.objectStore(STORE_NAME);
-			const request = store.delete(key);
+			const request = store.put(data, key);
 
 			request.onsuccess = () => {
-				// 更新 IndexedDB 大小
-				updateIndexedDbSize();
-				if (reason === 'quota') {
-					console.log(`IndexedDB quota eviction: removed ${key}`);
-				}
+				updateIndexedDbSize().catch(() => {});
 				resolve();
 			};
 			request.onerror = () => reject(request.error);
 		});
 	} catch (e) {
-		console.error('Failed to delete from IndexedDB:', e);
-	}
-}
-
-// 检查并执行 IndexedDB 配额驱逐
-async function checkIndexedDbQuota(newItemSize: number): Promise<void> {
-	let currentSize = 0;
-	indexedDbCacheSize.subscribe((n) => {
-		currentSize = n;
-	})();
-
-	// 如果添加新项后不会超过限制，不需要驱逐
-	if (currentSize + newItemSize <= MAX_INDEXEDDB_CACHE) {
-		return;
-	}
-
-	// 需要驱逐：从 IndexedDB 中删除最旧的项（不在内存中的优先）
-	try {
-		const database = await initDB();
-		return new Promise((resolve, reject) => {
-			const transaction = database.transaction([STORE_NAME], 'readwrite');
-			const store = transaction.objectStore(STORE_NAME);
-
-			// 获取所有键
-			const getAllKeys = store.getAllKeys();
-			getAllKeys.onsuccess = () => {
-				const keys = getAllKeys.result as string[];
-
-				// 优先删除不在内存中的项（最不活跃）
-				const keysNotInMemory = keys.filter((key) => !memoryCache.has(key));
-
-				// 按访问时间排序（通过键的最后修改时间，这里简化为按顺序）
-				let spaceNeeded = currentSize + newItemSize - MAX_INDEXEDDB_CACHE;
-				let deletedCount = 0;
-
-				// 使用 Promise 来等待所有删除操作完成
-				const deletePromises: Promise<void>[] = [];
-
-				for (const key of keysNotInMemory) {
-					if (spaceNeeded <= 0) break;
-
-					// 获取项的大小
-					const getRequest = store.get(key);
-					getRequest.onsuccess = () => {
-						const blob = getRequest.result as Blob;
-						if (blob) {
-							store.delete(key);
-							spaceNeeded -= blob.size;
-							deletedCount++;
-						}
-					};
-				}
-
-				// 如果删除不在内存中的项还不够，继续删除在内存中的项
-				if (spaceNeeded > 0) {
-					const keysInMemory = keys.filter((key) => memoryCache.has(key));
-					// 按内存缓存中的时间戳排序（最旧的优先）
-					const sortedKeys = keysInMemory.sort((a, b) => {
-						const itemA = memoryCache.get(a);
-						const itemB = memoryCache.get(b);
-						return (itemA?.timestamp || 0) - (itemB?.timestamp || 0);
-					});
-
-					for (const key of sortedKeys) {
-						if (spaceNeeded <= 0) break;
-
-						const getRequest = store.get(key);
-						getRequest.onsuccess = () => {
-							const blob = getRequest.result as Blob;
-							if (blob) {
-								store.delete(key);
-								spaceNeeded -= blob.size;
-								deletedCount++;
-							}
-						};
-					}
-				}
-
-				transaction.oncomplete = () => {
-					if (deletedCount > 0) {
-						console.log(`IndexedDB quota eviction: removed ${deletedCount} items`);
-						updateIndexedDbSize().catch((e) => {
-							console.error('Failed to update IndexedDB size after eviction:', e);
-						});
-					}
-					resolve();
-				};
-
-				transaction.onerror = () => reject(transaction.error);
-			};
-
-			getAllKeys.onerror = () => reject(getAllKeys.error);
-		});
-	} catch (e) {
-		console.error('Failed to check IndexedDB quota:', e);
+		console.error('Failed to cache PNG in IndexedDB:', e);
 	}
 }
 
@@ -352,77 +238,7 @@ async function updateIndexedDbSize(): Promise<void> {
 	}
 }
 
-// 存入 IndexedDB
-async function putToIndexedDB(key: string, data: Blob): Promise<void> {
-	try {
-		// 先检查配额，如果需要则驱逐（等待完成）
-		await checkIndexedDbQuota(data.size).catch((e) => {
-			console.error('Failed to check IndexedDB quota:', e);
-		});
-
-		const database = await initDB();
-		return new Promise((resolve, reject) => {
-			const transaction = database.transaction([STORE_NAME], 'readwrite');
-			const store = transaction.objectStore(STORE_NAME);
-
-			const request = store.put(data, key);
-
-			request.onsuccess = () => {
-				// 更新 IndexedDB 大小（等待完成）
-				updateIndexedDbSize()
-					.then(() => resolve())
-					.catch((e) => {
-						console.error('Failed to update IndexedDB size:', e);
-						resolve(); // 即使更新大小失败也继续
-					});
-			};
-			request.onerror = () => reject(request.error);
-		});
-	} catch (e) {
-		console.error('Failed to cache PNG in IndexedDB:', e);
-	}
-}
-
-// ==================== PNG 缓存操作 ====================
-
-// 存入内存缓存并同步到 IndexedDB
-async function putPngToMemory(key: string, data: Blob): Promise<void> {
-	const size = data.size;
-	const item: PngCacheItem = { data, size: size, timestamp: Date.now() };
-	let cacheSize = 0;
-	currentCacheSize.subscribe((n) => {
-		cacheSize = n;
-	})();
-
-	// 检查是否已存在
-	if (memoryCache.has(key)) {
-		const existingSize = memoryCache.get(key)!.size;
-		currentCacheSize.update((n) => n - existingSize);
-		memoryCache.delete(key);
-		cacheSize -= existingSize;
-	}
-
-	// LRU 淘汰 - 只从内存中删除，保留在 IndexedDB
-	while (cacheSize + size > MAX_MEMORY_CACHE && memoryCache.size > 0) {
-		const oldestKey = memoryCache.keys().next().value;
-		if (!oldestKey) break;
-		const oldest = memoryCache.get(oldestKey)!;
-		currentCacheSize.update((n) => n - oldest.size);
-		memoryCache.delete(oldestKey);
-		cacheSize -= oldest.size;
-
-		// 注意：不删除 IndexedDB 中的项，只从内存中驱逐
-		// IndexedDB 的驱逐由 checkIndexedDbQuota 在配额超限时处理
-	}
-
-	memoryCache.set(key, item);
-	currentCacheSize.update((n) => n + size);
-
-	// 同步到 IndexedDB
-	await putToIndexedDB(key, data);
-}
-
-// 存入 IndexedDB 和内存
+// 存入缓存 (PNG -> Memory + IndexedDB)
 export async function putPng(
 	tsId: string,
 	zIndex: number,
@@ -431,18 +247,14 @@ export async function putPng(
 	quality = 90
 ): Promise<void> {
 	const key = cacheKey(tsId, zIndex, bin, quality);
-
-	// 存入内存（会自动同步到 IndexedDB）
 	await putPngToMemory(key, data);
 }
 
 // 清除缓存
 export async function clearCache(): Promise<void> {
-	// 清除内存缓存
 	memoryCache.clear();
 	currentCacheSize.set(0);
 
-	// 清除 IndexedDB
 	try {
 		const database = await initDB();
 		return new Promise((resolve, reject) => {
@@ -451,7 +263,6 @@ export async function clearCache(): Promise<void> {
 			const request = store.clear();
 
 			request.onsuccess = () => {
-				// 更新 IndexedDB 大小
 				indexedDbCacheSize.set(0);
 				resolve();
 			};
@@ -462,163 +273,220 @@ export async function clearCache(): Promise<void> {
 	}
 }
 
-// 清除特定 tilt series 的缓存（用户显式操作）
-export async function clearCacheForTs(tsId: string): Promise<void> {
-	// 清除内存缓存中该 TS 的所有帧
-	const keysToDelete: string[] = [];
-	for (const key of memoryCache.keys()) {
-		if (key.startsWith(tsId + '_')) {
-			const item = memoryCache.get(key);
-			if (item) {
-				currentCacheSize.update((n) => n - item.size);
-			}
-			keysToDelete.push(key);
-		}
-	}
-	keysToDelete.forEach((key) => memoryCache.delete(key));
-
-	// 清除 IndexedDB 中该 TS 的所有帧（用户显式操作）
-	try {
-		const database = await initDB();
-		return new Promise((resolve, reject) => {
-			const transaction = database.transaction([STORE_NAME], 'readwrite');
-			const store = transaction.objectStore(STORE_NAME);
-
-			// Get all keys and delete ones for this TS
-			const getAllKeys = store.getAllKeys();
-			getAllKeys.onsuccess = () => {
-				const keys = getAllKeys.result as string[];
-				const keysToDelete = keys.filter((key) => key.startsWith(tsId + '_'));
-
-				if (keysToDelete.length === 0) {
-					resolve();
-					return;
-				}
-
-				// Delete all matching keys
-				keysToDelete.forEach((key) => {
-					store.delete(key);
-				});
-
-				// Update IndexedDB size after all deletions complete
-				transaction.oncomplete = () => {
-					updateIndexedDbSize()
-						.then(() => resolve())
-						.catch((e) => {
-							console.error('Failed to update IndexedDB size:', e);
-							resolve(); // Continue even if update fails
-						});
-				};
-			};
-			getAllKeys.onerror = () => reject(getAllKeys.error);
-		});
-	} catch (e) {
-		console.error('Failed to clear cache for TS:', e);
-	}
+// 删除所有缓存 (alias for clearCache)
+export async function deleteCache(): Promise<void> {
+	await clearCache();
 }
 
-// ==================== 缓存管理功能 ====================
+// 刷新缓存：与后端同步，重新获取所有 PNG
+export async function refreshCache(): Promise<{ success: number; failed: number; total: number }> {
+	// Clear cache first
+	await clearCache();
+	// Then re-cache all
+	return cacheAllMdocs();
+}
 
-// 缓存所有 PNG：为所有 tilt series 的所有帧生成并缓存 PNG
-// 使用并行处理以提高性能，并支持进度回调
+// ==================== MDOC-BY-MDOC CACHING ====================
+
+/**
+ * Cache all frames of a single mdoc in parallel.
+ * This is the primary caching unit - process one mdoc at a time, all frames in parallel.
+ */
+export async function cacheMdoc(
+	ts: TiltSeries,
+	onProgress?: (current: number, total: number) => void
+): Promise<{ success: number; failed: number }> {
+	let success = 0;
+	let failed = 0;
+	const total = ts.frames.length;
+
+	// Process all frames of this mdoc in parallel
+	await Promise.all(
+		ts.frames.map(async (frame, index) => {
+			try {
+				const cached = await getPng(ts.id, frame.zIndex, 8, 90);
+				if (!cached) {
+					// Not in cache, fetch from backend
+					const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
+					await putPng(ts.id, frame.zIndex, blob, 8, 90);
+				}
+				success++;
+			} catch (e) {
+				console.error(`Failed to cache ${ts.id}/${frame.zIndex}:`, e);
+				failed++;
+			}
+			if (onProgress) {
+				onProgress(success + failed, total);
+			}
+		})
+	);
+
+	return { success, failed };
+}
+
+/**
+ * Cache all mdocs sequentially, processing frames within each mdoc in parallel.
+ * This prevents overwhelming the system while maximizing throughput per mdoc.
+ */
+export async function cacheAllMdocs(
+	onProgress?: (progress: { currentTs: string; current: number; total: number; completedTs: number; totalTs: number }) => void
+): Promise<{ success: number; failed: number; total: number }> {
+	let allSeries: TiltSeries[] = [];
+	const unsubscribe = tiltSeries.subscribe((series) => {
+		allSeries = series;
+	});
+	unsubscribe();
+
+	let totalSuccess = 0;
+	let totalFailed = 0;
+	let totalFrames = 0;
+	for (const ts of allSeries) {
+		totalFrames += ts.frames.length;
+	}
+
+	let completedTs = 0;
+
+	// Process mdocs sequentially
+	for (const ts of allSeries) {
+		const result = await cacheMdoc(ts, (current, total) => {
+			if (onProgress) {
+				onProgress({
+					currentTs: ts.id,
+					current,
+					total,
+					completedTs,
+					totalTs: allSeries.length
+				});
+			}
+		});
+		totalSuccess += result.success;
+		totalFailed += result.failed;
+		completedTs++;
+	}
+
+	return { success: totalSuccess, failed: totalFailed, total: totalFrames };
+}
+
+// Legacy alias for compatibility
 export async function cacheAll(
 	onProgress?: (progress: { cached: number; total: number; currentTs: string; currentFrame: number }) => void
 ): Promise<{ success: number; failed: number; total: number }> {
-	let success = 0;
-	let failed = 0;
-	let total = 0;
-
-	// 获取所有 tilt series
-	let allSeries: TiltSeries[] = [];
-	const unsubscribe = tiltSeries.subscribe((series) => {
-		allSeries = series;
-	});
-	unsubscribe();
-
-	// 计算总帧数
-	for (const ts of allSeries) {
-		total += ts.frames.length;
-	}
-
 	let cached = 0;
-	const CONCURRENT_LIMIT = 20; // 同时处理的帧数限制
-
-	// 处理单个帧
-	const processFrame = async (ts: TiltSeries, frame: Frame, frameIndex: number): Promise<void> => {
-		try {
-			// 使用去重版本获取 PNG，防止与 lazy loading 重复请求
-			const png = await getPngDeduped(ts.id, frame.zIndex, 8, 90);
-			success++;
-		} catch (e) {
-			console.error(`Failed to cache PNG for ${ts.id}/${frame.zIndex}:`, e);
-			failed++;
-		} finally {
-			// Use frameIndex for atomic progress tracking instead of shared counter
-			if (onProgress) {
-				onProgress({
-					cached: frameIndex + 1,
-					total,
-					currentTs: ts.id,
-					currentFrame: frame.zIndex
-				});
-			}
-		}
-	};
-
-	// 并行处理所有帧
-	let globalFrameIndex = 0;
-	for (const ts of allSeries) {
-		// 将帧分成批次，每批最多 CONCURRENT_LIMIT 个
-		for (let i = 0; i < ts.frames.length; i += CONCURRENT_LIMIT) {
-			const batch = ts.frames.slice(i, i + CONCURRENT_LIMIT);
-			await Promise.all(batch.map((frame) => {
-				const frameIndex = globalFrameIndex++;
-				return processFrame(ts, frame, frameIndex);
-			}));
-		}
-	}
-
-	return { success, failed, total };
-}
-
-// 刷新缓存：与后端同步，重新获取所有 PNG（用于外部工具重新生成 PNG 后同步）
-export async function refreshCache(): Promise<{ success: number; failed: number; total: number }> {
-	let success = 0;
-	let failed = 0;
 	let total = 0;
-
-	// 获取所有 tilt series
-	let allSeries: TiltSeries[] = [];
-	const unsubscribe = tiltSeries.subscribe((series) => {
-		allSeries = series;
+	
+	return cacheAllMdocs((p) => {
+		cached = p.current;
+		total = p.total;
+		if (onProgress) {
+			onProgress({
+				cached,
+				total,
+				currentTs: p.currentTs,
+				currentFrame: 0
+			});
+		}
 	});
-	unsubscribe();
+}
 
-	// 先清除缓存
-	await clearCache();
+// ==================== API 调用 ====================
 
-	// 重新获取所有 PNG
-	for (const ts of allSeries) {
-		for (const frame of ts.frames) {
-			total++;
-			try {
-				// 强制从后端获取新的 PNG
-				const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
-				await putPng(ts.id, frame.zIndex, blob, 8, 90);
-				success++;
-			} catch (e) {
-				console.error(`Failed to refresh PNG for ${ts.id}/${frame.zIndex}:`, e);
-				failed++;
-			}
+// 扫描项目
+export async function scanProject(config: ScanConfig): Promise<TiltSeries[]> {
+	console.log('[scanProject] Starting scan with config:', config);
+	const response = await fetch(`${API_BASE}/api/mdoc/scan`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(config)
+	});
+
+	if (!response.ok) {
+		const errorText = await response.text();
+		console.error('[scanProject] Scan failed:', response.status, errorText);
+		throw new Error(`Scan failed: ${response.status} - ${errorText}`);
+	}
+
+	const data = await response.json();
+	console.log('[scanProject] Scan completed, found', data.tiltSeries.length, 'tilt series');
+	tiltSeries.set(data.tiltSeries);
+	return data.tiltSeries;
+}
+
+// 获取 PNG 预览 (simple version, fetch directly)
+export async function fetchPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob> {
+	const response = await fetch(
+		`${API_BASE}/api/preview/${tsId}/${zIndex}?bin=${bin}&quality=${quality}`
+	);
+
+	if (!response.ok) throw new Error('Failed to fetch PNG');
+
+	const blob = await response.blob();
+	await putPng(tsId, zIndex, blob, bin, quality);
+	return blob;
+}
+
+// ==================== SAVE ALL (UNIFIED) ====================
+
+export interface SaveAllResult {
+	success: boolean;
+	saved: string[];
+	failed: string[];
+	deleted: string[];
+	message: string;
+}
+
+/**
+ * Save all mdoc changes in one request.
+ * Sends all selections from frontend (single source of truth) to backend.
+ * Backend writes directly to disk.
+ */
+export async function saveAll(
+	selectionsState: SelectionState,
+	deletePaths?: string[]
+): Promise<SaveAllResult> {
+	// Convert selections Map to plain object for JSON serialization
+	const selectionsPayload: Record<string, Record<number, boolean>> = {};
+	
+	for (const [mdocPath, tsSelections] of selectionsState) {
+		if (tsSelections.size > 0) {
+			selectionsPayload[mdocPath] = Object.fromEntries(tsSelections);
 		}
 	}
 
-	return { success, failed, total };
-}
+	// Send save request
+	const response = await fetch(`${API_BASE}/api/mdoc/save-all`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ selections: selectionsPayload })
+	});
 
-// 删除所有缓存：清除所有 PNG 缓存
-export async function deleteCache(): Promise<void> {
-	await clearCache();
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Save all failed: ${errorText}`);
+	}
+
+	const saveResult = await response.json();
+
+	// Handle deletions if any
+	let deleteResult = { deleted: [] as string[], failed: [] as string[] };
+	if (deletePaths && deletePaths.length > 0) {
+		const deleteResponse = await fetch(`${API_BASE}/api/mdoc/delete-all`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ mdocPaths: deletePaths })
+		});
+		
+		if (deleteResponse.ok) {
+			deleteResult = await deleteResponse.json();
+		}
+	}
+
+	return {
+		success: saveResult.success && deleteResult.failed?.length === 0,
+		saved: saveResult.saved || [],
+		failed: [...(saveResult.failed || []), ...(deleteResult.failed || [])],
+		deleted: deleteResult.deleted || [],
+		message: saveResult.message
+	};
 }
 
 // ==================== 选择状态操作 ====================
@@ -636,7 +504,6 @@ export function getFrameSelection(
 		return tsSelections.get(zIndex) ?? original;
 	}
 
-	// Fallback to store if selectionsState not provided
 	let tsSelections: Map<number, boolean> | undefined;
 	const unsubscribe = selections.subscribe((state) => {
 		tsSelections = state.get(mdocPath);
@@ -730,107 +597,6 @@ export function loadPersistedSelections(): void {
 			console.error('Failed to load selections:', e);
 		}
 	}
-}
-
-// ==================== API 调用 ====================
-
-// 扫描项目
-export async function scanProject(config: ScanConfig): Promise<TiltSeries[]> {
-	console.log('[scanProject] Starting scan with config:', config);
-	const response = await fetch(`${API_BASE}/api/mdoc/scan`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(config)
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text();
-		console.error('[scanProject] Scan failed:', response.status, errorText);
-		throw new Error(`Scan failed: ${response.status} - ${errorText}`);
-	}
-
-	const data = await response.json();
-	console.log('[scanProject] Scan completed, found', data.tiltSeries.length, 'tilt series');
-	tiltSeries.set(data.tiltSeries);
-	return data.tiltSeries;
-}
-
-// 获取 PNG 预览
-export async function fetchPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob> {
-	const response = await fetch(
-		`${API_BASE}/api/preview/${tsId}/${zIndex}?bin=${bin}&quality=${quality}`
-	);
-
-	if (!response.ok) throw new Error('Failed to fetch PNG');
-
-	const blob = await response.blob();
-	await putPng(tsId, zIndex, blob, bin, quality);
-	return blob;
-}
-
-// ==================== SAVE ALL (UNIFIED) ====================
-
-export interface SaveAllResult {
-	success: boolean;
-	saved: string[];
-	failed: string[];
-	deleted: string[];
-	message: string;
-}
-
-/**
- * Save all mdoc changes in one request.
- * Sends all selections from frontend (single source of truth) to backend.
- * Backend writes directly to disk.
- */
-export async function saveAll(
-	selectionsState: SelectionState,
-	deletePaths?: string[]
-): Promise<SaveAllResult> {
-	// Convert selections Map to plain object for JSON serialization
-	const selectionsPayload: Record<string, Record<number, boolean>> = {};
-	
-	for (const [mdocPath, tsSelections] of selectionsState) {
-		if (tsSelections.size > 0) {
-			selectionsPayload[mdocPath] = Object.fromEntries(tsSelections);
-		}
-	}
-
-	// Send save request
-	const response = await fetch(`${API_BASE}/api/mdoc/save-all`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ selections: selectionsPayload })
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text();
-		throw new Error(`Save all failed: ${errorText}`);
-	}
-
-	const saveResult = await response.json();
-
-	// Handle deletions if any
-	let deleteResult = { deleted: [] as string[], failed: [] as string[] };
-	if (deletePaths && deletePaths.length > 0) {
-		const deleteResponse = await fetch(`${API_BASE}/api/mdoc/delete-all`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ mdocPaths: deletePaths })
-		});
-		
-		if (deleteResponse.ok) {
-			deleteResult = await deleteResponse.json();
-		}
-	}
-
-	return {
-		success: saveResult.success && deleteResult.failed?.length === 0,
-		saved: saveResult.saved || [],
-		failed: [...(saveResult.failed || []), ...(deleteResult.failed || [])],
-		deleted: deleteResult.deleted || [],
-		message: saveResult.message
-	};
 }
 
 // ==================== 派生状态 ====================

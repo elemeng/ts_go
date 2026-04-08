@@ -12,7 +12,8 @@
 		setBatchSelection,
 		clearTsSelections,
 		saveAll,
-		getPngDeduped,
+		getPng,
+		fetchPng,
 		cacheWarning,
 		scanProject,
 		loadPersistedTiltSeries,
@@ -407,34 +408,30 @@
 		}
 	}
 
-	// 加载 PNG action
+	// 加载 PNG action (simplified - no dedup logic)
 	function loadFramePng(node: HTMLImageElement, params: { tsId: string; zIndex: number }) {
 		let currentUrl: string | null = null;
 		const frameKey = `${params.tsId}_${params.zIndex}`;
 
 		// Set frame to unselected when using mock SVG (before real PNG loads)
-		// Only do this if not already in selections store
 		if (!selectionsStore.get(params.tsId)?.has(params.zIndex)) {
 			setFrameSelection(params.tsId, params.zIndex, false);
 		}
 
 		(async () => {
 			try {
-				console.log(`[loadFramePng] Loading PNG for ${params.tsId}/${params.zIndex}`);
-
-				// 使用去重版本获取 PNG，防止与 cacheAll 重复请求
-				const blob = await getPngDeduped(params.tsId, params.zIndex, 8, 90);
-				console.log(`[loadFramePng] Received blob size: ${blob.size} bytes for ${params.tsId}/${params.zIndex}`);
+				// Try cache first, then fetch
+				let blob = await getPng(params.tsId, params.zIndex, 8, 90);
+				if (!blob) {
+					blob = await fetchPng(params.tsId, params.zIndex, 8, 90);
+				}
 
 				const url = URL.createObjectURL(blob);
 				currentUrl = url;
 				node.src = url;
-				// Mark as loaded
 				loadedPngFrames = new Set(loadedPngFrames).add(frameKey);
-				console.log(`[loadFramePng] Successfully loaded PNG for ${params.tsId}/${params.zIndex}`);
 			} catch (e) {
-				console.error(`[loadFramePng] Exception loading PNG for ${params.tsId}/${params.zIndex}:`, e);
-				toastStore.error(`Failed to load PNG`, `${params.tsId}/${params.zIndex}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+				console.error(`Failed to load PNG for ${params.tsId}/${params.zIndex}:`, e);
 			}
 		})();
 
