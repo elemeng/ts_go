@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchUserHome } from '@/lib/api';
 import type { ScanConfig } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,24 @@ import {
 } from '@/components/ui/dialog';
 import { FileBrowser } from './file-browser';
 
+const STORAGE_KEY = 'ts_scan_config';
+
+function loadPersistedConfig(): Partial<ScanConfig> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return {};
+}
+
+function savePersistedConfig(config: ScanConfig) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  } catch {}
+}
+
 interface ScanDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,47 +42,70 @@ interface ScanDialogProps {
 
 type DirField = 'mdoc_dir' | 'image_dir' | 'png_dir';
 
+const DEFAULTS: ScanConfig = {
+  mdoc_dir: '',
+  image_dir: '',
+  png_dir: '',
+  mdoc_prefix_cut: 0,
+  mdoc_suffix_cut: 0,
+  image_prefix_cut: 0,
+  image_suffix_cut: 0,
+};
+
 export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
-  const [config, setConfig] = useState<ScanConfig>({
-    mdoc_dir: '',
-    image_dir: '',
-    png_dir: '',
-    mdoc_prefix_cut: 0,
-    mdoc_suffix_cut: 0,
-    image_prefix_cut: 0,
-    image_suffix_cut: 0,
-  });
+  const [config, setConfig] = useState<ScanConfig>(() => ({
+    ...DEFAULTS,
+    ...loadPersistedConfig(),
+  }));
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [browserTarget, setBrowserTarget] = useState<DirField | null>(null);
+  const hasInitialized = useRef(false);
 
+  // Persist config changes
   useEffect(() => {
-    if (open && !config.mdoc_dir) {
-      fetchUserHome()
-        .then((home) => {
-          setConfig((prev) => ({
-            ...prev,
-            mdoc_dir: home,
-            image_dir: home,
-            png_dir: home,
-          }));
-        })
-        .catch(() => {});
+    if (hasInitialized.current) {
+      savePersistedConfig(config);
     }
-  }, [open, config.mdoc_dir]);
+  }, [config]);
 
-  const openBrowser = (field: DirField) => {
+  // Fill in user home for empty fields on first open
+  useEffect(() => {
+    if (open && !hasInitialized.current) {
+      hasInitialized.current = true;
+      const persisted = loadPersistedConfig();
+      // Only fetch user home if no persisted config at all
+      if (!persisted.mdoc_dir) {
+        fetchUserHome()
+          .then((home) => {
+            setConfig((prev) => ({
+              ...prev,
+              mdoc_dir: prev.mdoc_dir || home,
+              image_dir: prev.image_dir || home,
+              png_dir: prev.png_dir || home,
+            }));
+          })
+          .catch(() => {});
+      }
+    }
+  }, [open]);
+
+  const updateField = useCallback((field: DirField | string, value: string | number) => {
+    setConfig((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const openBrowser = useCallback((field: DirField) => {
     setBrowserTarget(field);
-  };
+  }, []);
 
-  const handleBrowserSelect = (path: string) => {
+  const handleBrowserSelect = useCallback((path: string) => {
     if (browserTarget) {
       setConfig((prev) => ({ ...prev, [browserTarget]: path }));
       setBrowserTarget(null);
     }
-  };
+  }, [browserTarget]);
 
-  const handleScan = async () => {
+  const handleScan = useCallback(async () => {
     setIsScanning(true);
     setError(null);
     try {
@@ -74,7 +115,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
     } finally {
       setIsScanning(false);
     }
-  };
+  }, [config, onScan]);
 
   const dirLabel = (field: DirField) => {
     switch (field) {
@@ -114,7 +155,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
                   <Input
                     id={field}
                     value={config[field]}
-                    onChange={(e) => setConfig((prev) => ({ ...prev, [field]: e.target.value }))}
+                    onChange={(e) => updateField(field, e.target.value)}
                     placeholder={dirPlaceholder(field)}
                     className="flex-1"
                   />
@@ -138,9 +179,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
                   id="mdoc_prefix_cut"
                   type="number"
                   value={config.mdoc_prefix_cut ?? 0}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, mdoc_prefix_cut: parseInt(e.target.value) || 0 }))
-                  }
+                  onChange={(e) => updateField('mdoc_prefix_cut', parseInt(e.target.value) || 0)}
                 />
               </div>
               <div className="grid gap-2">
@@ -149,9 +188,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
                   id="mdoc_suffix_cut"
                   type="number"
                   value={config.mdoc_suffix_cut ?? 0}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, mdoc_suffix_cut: parseInt(e.target.value) || 0 }))
-                  }
+                  onChange={(e) => updateField('mdoc_suffix_cut', parseInt(e.target.value) || 0)}
                 />
               </div>
             </div>
@@ -163,9 +200,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
                   id="image_prefix_cut"
                   type="number"
                   value={config.image_prefix_cut ?? 0}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, image_prefix_cut: parseInt(e.target.value) || 0 }))
-                  }
+                  onChange={(e) => updateField('image_prefix_cut', parseInt(e.target.value) || 0)}
                 />
               </div>
               <div className="grid gap-2">
@@ -174,9 +209,7 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
                   id="image_suffix_cut"
                   type="number"
                   value={config.image_suffix_cut ?? 0}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, image_suffix_cut: parseInt(e.target.value) || 0 }))
-                  }
+                  onChange={(e) => updateField('image_suffix_cut', parseInt(e.target.value) || 0)}
                 />
               </div>
             </div>
