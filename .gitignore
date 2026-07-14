@@ -44,3 +44,4 @@ Thumbs.db
 /build
 /dist
 ts-go-release/
+ts-go-*.tar.gz
