@@ -10,15 +10,14 @@ START="${1:-8088}"
 END="${2:-9000}"
 
 for port in $(seq "$START" "$END"); do
-    if ! ss -tlnp "sport = :$port" 2>/dev/null | grep -q .; then
-        if ! lsof -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q .; then
-            echo "$port"
-            exit 0
-        fi
+    # ss checks the kernel socket table; filter by :port followed by space/end-of-line
+    # to avoid matching the header line or partial port numbers (e.g. 8088 matching 18088)
+    if ! ss -tlnp 2>/dev/null | grep -Eq ":${port}\b"; then
+        echo "$port"
+        exit 0
     fi
 done
 
 echo "No free port found in range $START-$END" >&2
-echo "Check firewall: firewall-cmd --list-ports" >&2
 echo "Check used ports: ss -tlnp" >&2
 exit 1
