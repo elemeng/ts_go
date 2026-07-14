@@ -72,7 +72,7 @@ async fn scan_project(Json(config): Json<ScanConfig>) -> Result<Json<Value>, (ax
     tracing::info!("Found {} tilt series", tilt_series.len());
 
     Ok(Json(json!({
-        "tilt_series": tilt_series,
+        "tiltSeries": tilt_series,
         "total": tilt_series.len()
     })))
 }
