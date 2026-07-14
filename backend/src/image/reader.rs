@@ -2,7 +2,7 @@ use ndarray::Array2;
 use std::path::Path;
 
 /// Read an MRC or TIFF image file and return as 2D f32 array.
-/// Supports .mrc, .mrcs, .rec (MRC) and .tif, .tiff (TIFF) extensions.
+/// Supports .mrc, .mrcs, .rec, .eer (MRC/CCP4 format) and .tif, .tiff (TIFF) extensions.
 pub fn read_image(path: &str) -> Option<Array2<f32>> {
     let p = Path::new(path);
     let ext = p.extension()?.to_str()?.to_lowercase();
