@@ -32,7 +32,7 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
         angles.push(angle);
 
         // Parse SubFramePath and match to image file
-        let mrc_path = block
+        let (mrc_path, matched) = block
             .get("SubFramePath")
             .map(|subframe_path| {
                 // Normalize path separators
@@ -48,10 +48,13 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
 
-                matcher
+                match matcher
                     .match_filename(&filename_no_ext)
                     .or_else(|| matcher.match_filename(&filename))
-                    .unwrap_or(filename)
+                {
+                    Some(path) => (path, true),
+                    None => (filename, false),
+                }
             })
             .unwrap_or_default();
 
@@ -59,7 +62,7 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
             z_index: z_value,
             angle,
             mrc_path,
-            selected: true,
+            selected: matched,
         });
     }
 
