@@ -23,9 +23,12 @@ done
 # Report taken ports
 if [ ${#TAKEN[@]} -gt 0 ]; then
     echo "Taken ports in range ${START}-${END}:" >&2
+    printf "  %-5s  %-8s  %s\n" "Port" "PID" "Process" >&2
     for p in "${TAKEN[@]}"; do
-        proc=$(ss -tlnp 2>/dev/null | grep ":${p} " | sed 's/.*users:((//; s/)).*//; s/,.*//' | head -1)
-        printf "  %-5s  %s\n" "$p" "$proc" >&2
+        line=$(ss -tlnp 2>/dev/null | grep ":${p} ")
+        proc=$(echo "$line" | sed 's/.*users:((//; s/,.*//; s/"//g' | head -1)
+        pid=$(echo "$line" | sed 's/.*,pid=//; s/,.*//' | head -1)
+        printf "  %-5s  %-8s  %s\n" "$p" "$pid" "$proc" >&2
     done
 else
     echo "No ports taken in range ${START}-${END}." >&2
