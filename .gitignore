@@ -45,3 +45,4 @@ Thumbs.db
 /dist
 ts-go-release/
 ts-go-*.tar.gz
+node_modules/
