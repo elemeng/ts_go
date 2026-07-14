@@ -50,9 +50,11 @@ export function FrameThumbnail({
     return () => observer.disconnect();
   }, [isVisible, onVisible]);
 
-  // Load PNG when visible
+  // Load PNG when visible (only if frame has a valid mrc path)
   useEffect(() => {
     if (!isVisible || isLoaded) return;
+    // Skip frames with no matching mrc file on disk
+    if (!isSelected && !frame.mrcPath.startsWith('/')) return;
 
     let cancelled = false;
     let currentUrl: string | null = null;
