@@ -115,7 +115,6 @@ ensure_backend_environment() {
     cd "$PROJECT_ROOT"
     return 0
 }
-}
 
 # ==================== UPDATE .ENV FILE ====================
 update_env_file() {
