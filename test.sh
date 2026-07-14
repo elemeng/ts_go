@@ -118,15 +118,16 @@ else
     warn "⚠  Could not find <title> in frontend response"
 fi
 
-# Step 6: Cleanup
-info "Step 5: Cleaning up..."
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
-rm -rf "$TEST_DIR"
-
+# Step 6: Keep running — don't clean up
 echo ""
 info "========================================"
-info "  Test complete!"
-info "  Tarball kept at: $PROJECT_ROOT/$TARBALL"
-info "  Run with: tar xzf $TARBALL && cd ts-go-release && ./run.sh"
+info "  Server is running!"
+info ""
+info "  http://localhost:${ACTUAL_PORT}"
+info ""
+info "  Press Ctrl+C to stop"
 info "========================================"
+echo ""
+
+# Wait for the server process
+wait "$SERVER_PID"
