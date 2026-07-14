@@ -20,6 +20,9 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_DIR="/tmp/ts-go-release"
 RELEASE_NAME="ts-go-$(date +%Y%m%d_%H%M%S)"
 
+# Add common tool locations to PATH
+export PATH="$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
+
 # Check prerequisites
 info "Checking prerequisites..."
 if ! command -v cargo &>/dev/null; then
@@ -27,8 +30,15 @@ if ! command -v cargo &>/dev/null; then
     exit 1
 fi
 if ! command -v deno &>/dev/null; then
-    error "Deno not found. Install from https://docs.deno.com/runtime/manual"
-    exit 1
+    warn "Deno not found. Trying npm/npx fallback..."
+    if ! command -v npx &>/dev/null && ! command -v node &>/dev/null; then
+        error "Neither Deno nor Node.js found. Install one."
+        exit 1
+    fi
+    USE_DENO=false
+    info "  Using npm/npx for frontend build"
+else
+    USE_DENO=true
 fi
 
 # Clean and prepare release directory
@@ -46,14 +56,12 @@ info "  → Backend binary: $(du -h target/release/ts-sv-backend | cut -f1)"
 # Step 2: Build static frontend
 info "Building static frontend (API_BASE=$API_BASE)..."
 cd "$PROJECT_ROOT/frontend"
-NEXT_PUBLIC_API_BASE="$API_BASE" deno task build 2>/dev/null || {
-    warn "deno task build failed, trying next build directly..."
-    cd "$PROJECT_ROOT/frontend"
-    NEXT_PUBLIC_API_BASE="$API_BASE" npx next build 2>/dev/null || {
-        error "Frontend build failed"
-        exit 1
-    }
-}
+
+if [ "$USE_DENO" = true ]; then
+    NEXT_PUBLIC_API_BASE="$API_BASE" deno task build 2>&1
+else
+    NEXT_PUBLIC_API_BASE="$API_BASE" npx next build 2>&1
+fi
 # Copy the static export output
 if [ -d "out" ]; then
     cp -r out/* "$RELEASE_DIR/frontend/"
