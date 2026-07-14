@@ -9,8 +9,6 @@ frontend/deno.lock
 
 # --- Environment ---
 .env
-.env.*
-!.env.example
 
 # --- Logs ---
 *.log
