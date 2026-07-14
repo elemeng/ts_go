@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test the full release pipeline: build → untar → run
-# Usage: ./test.sh [port]
-#   Default port is auto-detected (starts at 8088, falls back if busy)
+# Usage: ./test.sh [start_port]
+#   Default port range is 8088-9000 (auto-detected)
 
 set -euo pipefail
 
@@ -16,8 +16,16 @@ warn()  { echo -e "${YELLOW}[TEST]${NC} $*"; }
 error() { echo -e "${RED}[TEST]${NC} $*"; }
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORT="${1:-8088}"
+START_PORT="${1:-8088}"
 TEST_DIR="/tmp/ts-go-test-$$"
+
+# Find a free port
+info "Scanning for free port (range $START_PORT-9000)..."
+PORT=$("$PROJECT_ROOT/port_free.sh" "$START_PORT" 9000 2>/dev/null) || {
+    error "No free port found in range $START_PORT-9000"
+    exit 1
+}
+info "  → Using port $PORT"
 
 # Ensure we're on the right branch and clean
 info "Using project at: $PROJECT_ROOT"
@@ -50,6 +58,7 @@ export FRONTEND_DIR="$TEST_DIR/$EXTRACTED_DIR/frontend"
 export PORT="$PORT"
 
 # Start in background
+export PORT
 ./run.sh &
 SERVER_PID=$!
 
