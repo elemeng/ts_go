@@ -218,7 +218,10 @@ export function Gallery() {
       const result = await cacheAllMdocs(tiltSeries, (progress) => {
         setCacheProgress({ cached: progress.current, total: progress.total, currentTs: progress.currentTs });
       });
-      toast.success(`Cache complete: ${result.success}/${result.total} PNGs cached`);
+      toast.success(
+        `Cache complete: ${result.success}/${result.total} PNGs cached` +
+        (result.failed ? ` (${result.failed} failed)` : '')
+      );
     } catch (e) {
       toast.error('Cache failed', { description: e instanceof Error ? e.message : 'Unknown error' });
     } finally {

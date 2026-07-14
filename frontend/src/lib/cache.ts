@@ -154,14 +154,20 @@ export async function cacheMdoc(
   await Promise.all(
     ts.frames.map(async (frame, index) => {
       try {
+        console.log(`[cache] ${ts.id}/${frame.zIndex}: checking cache...`);
         const cached = await getPng(ts.id, frame.zIndex, 8, 90);
-        if (!cached) {
+        if (cached) {
+          console.log(`[cache] ${ts.id}/${frame.zIndex}: already cached`);
+          success++;
+        } else {
+          console.log(`[cache] ${ts.id}/${frame.zIndex}: fetching from API...`);
           const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
           await putPng(ts.id, frame.zIndex, blob, 8, 90);
+          console.log(`[cache] ${ts.id}/${frame.zIndex}: cached (${blob.size} bytes)`);
+          success++;
         }
-        success++;
       } catch (e) {
-        console.error(`Failed to cache ${ts.id}/${frame.zIndex}:`, e);
+        console.error(`[cache] FAILED ${ts.id}/${frame.zIndex}:`, e);
         failed++;
       }
       if (onProgress) {
