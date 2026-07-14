@@ -130,8 +130,21 @@ async fn get_preview(
         inflight.insert(task_key.clone(), rx);
     }
 
-    // Generate PNG (in a spawned blocking task for I/O)
-    let result = tokio::task::spawn_blocking(move || generate_png(&ts_id, frame_id, bin, quality))
+    // Get tilt series and frame info (async, outside spawn_blocking)
+    let ts = PROJECT_STATE.get_tilt_series(&ts_id).await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Tilt series not found: {ts_id}")))?;
+
+    let frame = ts.frames.iter().find(|f| f.z_index == frame_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Frame not found: {frame_id}")))?;
+
+    let mrc_path = frame.mrc_path.clone();
+    let png_dir = PROJECT_STATE.config.read().await.clone()
+        .map(|cfg| cfg.png_dir.clone());
+
+    // Generate PNG (blocking I/O: read MRC + process image)
+    let result = tokio::task::spawn_blocking(move || {
+        generate_png(&mrc_path, ts_id, frame_id, bin, quality, png_dir.as_deref())
+    })
         .await
         .map_err(|e| {
             (
@@ -163,23 +176,17 @@ fn build_png_response(data: Vec<u8>) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/png")], data)
 }
 
-fn generate_png(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Result<Vec<u8>, String> {
-    // Get tilt series
-    let rt = tokio::runtime::Handle::current();
-    let ts = rt
-        .block_on(PROJECT_STATE.get_tilt_series(ts_id))
-        .ok_or_else(|| format!("Tilt series not found: {ts_id}"))?;
-
-    // Find frame
-    let frame = ts
-        .frames
-        .iter()
-        .find(|f| f.z_index == frame_id)
-        .ok_or_else(|| format!("Frame not found: {frame_id}"))?;
-
+fn generate_png(
+    mrc_path: &str,
+    ts_id: String,
+    frame_id: i32,
+    bin: i32,
+    quality: i32,
+    png_dir: Option<&str>,
+) -> Result<Vec<u8>, String> {
     // Read image as f32
-    let img_f32 = read_image(&frame.mrc_path)
-        .ok_or_else(|| format!("Failed to read image: {}", frame.mrc_path))?;
+    let img_f32 = read_image(mrc_path)
+        .ok_or_else(|| format!("Failed to read image: {mrc_path}"))?;
 
     // Convert to f64 for processing
     let img_f64 = img_f32.mapv(|v| v as f64);
@@ -199,11 +206,10 @@ fn generate_png(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Result<Ve
         false, // bg_subtract
     );
 
-    // Save to disk
-    let config_path = rt.block_on(async { PROJECT_STATE.config.read().await.clone() });
-    if let Some(cfg) = config_path {
-        let png_path = Path::new(&cfg.png_dir)
-            .join(ts_id)
+    // Save to disk (if png_dir was provided)
+    if let Some(dir) = png_dir {
+        let png_path = Path::new(dir)
+            .join(&ts_id)
             .join(format!("bin{bin}"))
             .join(format!("frame_{frame_id:04}_q{quality}.png"));
         save_png(&contrasted, &png_path.to_string_lossy());
@@ -216,7 +222,7 @@ fn generate_png(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Result<Ve
     let mut cache = PNG_CACHE
         .lock()
         .map_err(|e| format!("Cache lock error: {e}"))?;
-    cache.put(ts_id, frame_id, bin, quality, data.clone());
+    cache.put(&ts_id, frame_id, bin, quality, data.clone());
 
     Ok(data)
 }
