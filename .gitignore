@@ -1,89 +1,47 @@
-# Test results
-test-results
+# --- Rust / Backend ---
+backend/target/
 
-# Node.js / Frontend
-node_modules
-bun.lock
+# --- Frontend (Next.js / Deno) ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/deno.lock
 
-# Output
-.output
-.vercel
-.netlify
-.wrangler
-/.svelte-kit
-/build
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment
+# --- Environment ---
 .env
 .env.*
 !.env.example
-!.env.test
 
-# Vite
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
-
-# Test data
-/test
-/test.tar
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
-eggs/
-.eggs/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg
-
-# Python virtual environments
-.venv/
-venv/
-ENV/
-env/
-
-# Python cache
-*.pyc
-*.pyo
-*.pyd
-.Python
-
-# Ruff
-.ruff_cache/
-.ruff_cache/
-
-# Log files
+# --- Logs ---
 *.log
-.backend.log
-.frontend.log
+logs/
 
-# PID files
+# --- PID files ---
 *.pid
-.backend.pid
-.frontend.pid
 
-# IDE
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Claude AI
+# --- AI / Editor ---
 .claude/
+.agents/
 
-# Python version (optional - uncomment if you want to ignore it)
-# .python-version
+# --- Test data (sample files) ---
+/test
+/test.tar
+*.data
+*.mrc
+*.mdoc
+*.tif
+
+# --- Build output ---
+/build
+/dist
