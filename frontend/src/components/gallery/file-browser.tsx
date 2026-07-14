@@ -11,7 +11,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { FolderIcon, FileIcon, HomeIcon, ArrowUpIcon, SearchIcon } from 'lucide-react';
+import { FolderIcon, FileIcon, HomeIcon, ArrowUpIcon, SearchIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
 
 interface FileEntry {
   name: string;
@@ -33,6 +33,7 @@ export function FileBrowser({ open, onOpenChange, onSelect, initialPath, title }
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
 
   const loadDirectory = useCallback(async (path: string) => {
     setIsLoading(true);
@@ -90,6 +91,7 @@ export function FileBrowser({ open, onOpenChange, onSelect, initialPath, title }
   // Filter and sort entries
   const filteredEntries = entries
     .filter((entry) => {
+      if (!showHidden && entry.name.startsWith('.')) return false;
       if (searchTerm && !entry.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
       return true;
     })
@@ -115,8 +117,8 @@ export function FileBrowser({ open, onOpenChange, onSelect, initialPath, title }
         </DialogHeader>
 
         {/* Search bar */}
-        <div className="px-4 pt-2">
-          <div className="relative">
+        <div className="flex items-center gap-2 px-4 pt-2">
+          <div className="relative flex-1">
             <SearchIcon className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Filter files..."
@@ -125,6 +127,16 @@ export function FileBrowser({ open, onOpenChange, onSelect, initialPath, title }
               className="pl-8"
             />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowHidden(!showHidden)}
+            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            className="shrink-0"
+          >
+            {showHidden ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+            <span className="ml-1 text-xs">.{showHidden ? '' : ''}</span>
+          </Button>
         </div>
 
         {/* Breadcrumb navigation */}
