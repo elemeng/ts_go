@@ -19,13 +19,27 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 START_PORT="${1:-8088}"
 TEST_DIR="/tmp/ts-go-test-$$"
 
-# Find a free port
-info "Scanning for free port (range $START_PORT-9000)..."
-PORT=$("$PROJECT_ROOT/port_free.sh" "$START_PORT" 9000 2>/dev/null) || {
-    error "No free port found in range $START_PORT-9000"
-    exit 1
-}
-info "  → Using port $PORT"
+# Find a free port — but if the first port is taken by our own binary, kill it
+info "Checking port $START_PORT..."
+if ss -tlnp 2>/dev/null | grep -Eq ":${START_PORT}[ :].*ts-sv-backend"; then
+    OLD_PID=$(ss -tlnp 2>/dev/null | grep ":${START_PORT} " | sed 's/.*,pid=//; s/,.*//' | head -1)
+    info "  → Port $START_PORT is taken by our own binary (PID: $OLD_PID). Killing it..."
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 1
+    PORT="$START_PORT"
+    info "  → Reusing port $PORT"
+elif ss -tlnp 2>/dev/null | grep -Eq ":${START_PORT}[ :]"; then
+    # Taken by something else — find a different free port
+    info "  → Port $START_PORT is taken by another process. Scanning for free port..."
+    PORT=$("$PROJECT_ROOT/port_free.sh" $((START_PORT + 1)) 9000 2>/dev/null) || {
+        error "No free port found in range $((START_PORT + 1))-9000"
+        exit 1
+    }
+    info "  → Using port $PORT"
+else
+    PORT="$START_PORT"
+    info "  → Port $PORT is free"
+fi
 
 # Ensure we're on the right branch and clean
 info "Using project at: $PROJECT_ROOT"
