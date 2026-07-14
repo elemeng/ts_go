@@ -142,40 +142,50 @@ export async function clearCache(): Promise<void> {
   }
 }
 
-/** Cache all frames of a single mdoc */
+/** Cache all frames of a single mdoc (only matched frames, with concurrency limit) */
 export async function cacheMdoc(
   ts: TiltSeries,
   onProgress?: (current: number, total: number) => void
 ): Promise<{ success: number; failed: number }> {
   let success = 0;
   let failed = 0;
-  const total = ts.frames.length;
 
-  await Promise.all(
-    ts.frames.map(async (frame, index) => {
+  // Only cache frames that have a matching mrc file on disk
+  const cacheable = ts.frames.filter((f) => f.selected);
+  const total = cacheable.length;
+
+  if (total === 0) return { success: 0, failed: 0 };
+
+  // Process with limited concurrency (6 parallel = browser connection limit)
+  const CONCURRENCY = 6;
+  const results: ('success' | 'failed')[] = new Array(total);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < total) {
+      const idx = nextIndex++;
+      const frame = cacheable[idx];
       try {
-        console.log(`[cache] ${ts.id}/${frame.zIndex}: checking cache...`);
         const cached = await getPng(ts.id, frame.zIndex, 8, 90);
-        if (cached) {
-          console.log(`[cache] ${ts.id}/${frame.zIndex}: already cached`);
-          success++;
-        } else {
-          console.log(`[cache] ${ts.id}/${frame.zIndex}: fetching from API...`);
+        if (!cached) {
           const blob = await fetchPng(ts.id, frame.zIndex, 8, 90);
           await putPng(ts.id, frame.zIndex, blob, 8, 90);
-          console.log(`[cache] ${ts.id}/${frame.zIndex}: cached (${blob.size} bytes)`);
-          success++;
         }
+        results[idx] = 'success';
       } catch (e) {
         console.error(`[cache] FAILED ${ts.id}/${frame.zIndex}:`, e);
-        failed++;
+        results[idx] = 'failed';
       }
       if (onProgress) {
-        onProgress(success + failed, total);
+        onProgress(results.filter((r) => r === 'success').length + results.filter((r) => r === 'failed').length, total);
       }
-    })
-  );
+    }
+  }
 
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  success = results.filter((r) => r === 'success').length;
+  failed = results.filter((r) => r === 'failed').length;
   return { success, failed };
 }
 
@@ -194,7 +204,7 @@ export async function cacheAllMdocs(
   let totalFailed = 0;
   let totalFrames = 0;
   for (const ts of tiltSeries) {
-    totalFrames += ts.frames.length;
+    totalFrames += ts.frames.filter((f) => f.selected).length;
   }
 
   let completedTs = 0;
