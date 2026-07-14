@@ -55,13 +55,13 @@ async fn main() {
 
     // Build the application router with all route groups
     let app = Router::new()
-        // Health endpoints
-        .nest("/", routes::health::router())
         // API endpoints
         .nest("/api/mdoc", routes::mdoc::router())
         .nest("/api/preview", routes::preview::router())
         .nest("/api/project", routes::project::router())
         .nest("/api/files", routes::files::router())
+        // Root-level routes (health check)
+        .merge(routes::health::router())
         // Apply CORS
         .layer(cors)
         // Serve static frontend files for everything else
@@ -69,8 +69,8 @@ async fn main() {
 
     let addr = "0.0.0.0:8000";
     tracing::info!("Starting server on {addr}");
-    tracing::info!("  → API:  http://localhost:{addr}/api/");
-    tracing::info!("  → App:  http://localhost:{addr}/");
+    tracing::info!("  → App:  http://localhost:8000");
+    tracing::info!("  → API:  http://localhost:8000/api/");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
