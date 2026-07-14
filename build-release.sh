@@ -101,12 +101,12 @@ info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 RELEASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORT="${1:-8000}"
 BINARY_PID=""
+ACTUAL_PORT=""
 
 cleanup() {
     info "Shutting down..."
-    [ -n "$BINARY_PID" ] && kill "$BINARY_PID" 2>/dev/null && info "  Stopped"
+    [ -n "$BINARY_PID" ] && kill "$BINARY_PID" 2>/dev/null && wait "$BINARY_PID" 2>/dev/null && info "  Stopped"
     exit 0
 }
 trap cleanup SIGINT SIGTERM EXIT
@@ -119,14 +119,32 @@ fi
 # Point the binary to the frontend directory next to it
 export FRONTEND_DIR="$RELEASE_DIR/frontend"
 
-info "Starting server on port $PORT..."
+# Start the binary and capture the actual port from its output
+# The binary prints __PORT__=<number> on stdout when it binds successfully
+info "Starting server (auto port detection)..."
 "$RELEASE_DIR/backend/ts-sv-backend" &
 BINARY_PID=$!
-sleep 0.5
 
-if ! kill -0 "$BINARY_PID" 2>/dev/null; then
-    error "Server failed to start"
-    exit 1
+# Read the __PORT__ line from stdout (with timeout)
+while read -t 3 line; do
+    if [[ "$line" =~ ^__PORT__=([0-9]+)$ ]]; then
+        ACTUAL_PORT="${BASH_REMATCH[1]}"
+        break
+    fi
+done < <(tail --pid=$BINARY_PID -f /proc/$BINARY_PID/fd/1 2>/dev/null || sleep 1)
+
+if [ -z "$ACTUAL_PORT" ]; then
+    if ! kill -0 "$BINARY_PID" 2>/dev/null; then
+        error "Server failed to start. Check the output above for details."
+        exit 1
+    fi
+    # Fallback: try to detect from process
+    sleep 1
+    ACTUAL_PORT=$(ss -tlnp 2>/dev/null | grep "$BINARY_PID" | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+fi
+
+if [ -z "$ACTUAL_PORT" ]; then
+    ACTUAL_PORT="8088"  # final fallback
 fi
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
@@ -135,7 +153,7 @@ echo ""
 info "============================================"
 info "  App is running!"
 info ""
-info "  http://${IP}:${PORT}"
+info "  http://${IP}:${ACTUAL_PORT}"
 info ""
 info "  Press Ctrl+C to stop"
 info "============================================"

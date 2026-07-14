@@ -22,7 +22,7 @@ export PATH="$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
 
 # Service configuration
 readonly FRONTEND_PORT=${FRONTEND_PORT:-5173}
-readonly BACKEND_PORT=${BACKEND_PORT:-8000}
+readonly BACKEND_PORT=${BACKEND_PORT:-8088}
 readonly FRONTEND_HOST=${FRONTEND_HOST:-0.0.0.0}
 readonly BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 
