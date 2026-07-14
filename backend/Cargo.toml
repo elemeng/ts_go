@@ -8,7 +8,7 @@ description = "CryoET Tilt Series API - Axum backend"
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors", "fs"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

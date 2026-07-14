@@ -1,7 +1,8 @@
 import type { TiltSeries, ScanConfig, SelectionState, SaveAllResult } from './types';
 
-// API base URL - from env variable
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+// API base URL — empty = same origin (production, backend serves frontend)
+// Set NEXT_PUBLIC_API_BASE for dev mode (e.g. http://localhost:8000)
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
 // ==================== Project / Scan ====================
 

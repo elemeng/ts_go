@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build a self-contained release tarball: backend binary + static frontend
-# Usage: ./build-release.sh [api_base_url]
-#   api_base_url defaults to http://localhost:8000
+# Usage: ./build-release.sh
+#   The frontend uses relative API paths (same origin).
+#   Set NEXT_PUBLIC_API_BASE if you need a different API host at build time.
 
 set -euo pipefail
 
@@ -15,7 +16,7 @@ info()  { echo -e "${GREEN}[BUILD]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
-API_BASE="${1:-http://localhost:8000}"
+API_BASE="${1:-}"  # empty = same origin (recommended for production)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_DIR="/tmp/ts-go-release"
 RELEASE_NAME="ts-go-$(date +%Y%m%d_%H%M%S)"
@@ -54,13 +55,18 @@ cp target/release/ts-sv-backend "$RELEASE_DIR/backend/"
 info "  → Backend binary: $(du -h target/release/ts-sv-backend | cut -f1)"
 
 # Step 2: Build static frontend
-info "Building static frontend (API_BASE=$API_BASE)..."
+info "Building static frontend..."
 cd "$PROJECT_ROOT/frontend"
 
+if [ -n "$API_BASE" ]; then
+    info "  API_BASE=$API_BASE"
+    export NEXT_PUBLIC_API_BASE="$API_BASE"
+fi
+
 if [ "$USE_DENO" = true ]; then
-    NEXT_PUBLIC_API_BASE="$API_BASE" deno task build 2>&1
+    deno task build 2>&1
 else
-    NEXT_PUBLIC_API_BASE="$API_BASE" npx next build 2>&1
+    npx next build 2>&1
 fi
 # Copy the static export output
 if [ -d "out" ]; then
@@ -80,7 +86,8 @@ info "Creating run script..."
 cat > "$RELEASE_DIR/run.sh" << 'RUNSCRIPT'
 #!/bin/bash
 # One-command launcher for CryoET Tilt Series Curator
-# Usage: ./run.sh [frontend_port] [backend_port]
+# Backend serves both the API and the static frontend on one port.
+# Usage: ./run.sh [port]
 
 set -euo pipefail
 
@@ -91,86 +98,49 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 RELEASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRONTEND_PORT="${1:-5173}"
-BACKEND_PORT="${2:-8000}"
-BACKEND_PID=""
-FRONTEND_PID=""
+PORT="${1:-8000}"
+BINARY_PID=""
 
 cleanup() {
     info "Shutting down..."
-    [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null && info "  Backend stopped"
-    [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null && info "  Frontend stopped"
+    [ -n "$BINARY_PID" ] && kill "$BINARY_PID" 2>/dev/null && info "  Stopped"
     exit 0
 }
 trap cleanup SIGINT SIGTERM EXIT
 
-# Validate the binary
 if [ ! -x "$RELEASE_DIR/backend/ts-sv-backend" ]; then
-    error "Backend binary not found at backend/ts-sv-backend"
+    error "Binary not found at backend/ts-sv-backend"
     exit 1
 fi
 
-# Check if frontend files exist
-if [ ! -f "$RELEASE_DIR/frontend/index.html" ] && [ ! -d "$RELEASE_DIR/frontend/.next" ]; then
-    error "Frontend files not found in frontend/"
-    exit 1
-fi
+# Point the binary to the frontend directory next to it
+export FRONTEND_DIR="$RELEASE_DIR/frontend"
 
-info "Starting backend on port $BACKEND_PORT..."
+info "Starting server on port $PORT..."
 "$RELEASE_DIR/backend/ts-sv-backend" &
-BACKEND_PID=$!
+BINARY_PID=$!
 sleep 0.5
-if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-    error "Backend failed to start"
+
+if ! kill -0 "$BINARY_PID" 2>/dev/null; then
+    error "Server failed to start"
     exit 1
 fi
-info "  ✓ Backend ready (PID: $BACKEND_PID)"
 
-info "Starting frontend on port $FRONTEND_PORT..."
-
-if [ -f "$RELEASE_DIR/frontend/index.html" ]; then
-    # Static export — use any available HTTP server
-    if command -v python3 &>/dev/null; then
-        cd "$RELEASE_DIR/frontend"
-        python3 -m http.server "$FRONTEND_PORT" --bind 0.0.0.0 &
-        FRONTEND_PID=$!
-        cd "$RELEASE_DIR"
-        info "  ✓ Frontend via python3 (PID: $FRONTEND_PID)"
-    elif command -v python &>/dev/null; then
-        cd "$RELEASE_DIR/frontend"
-        python -m SimpleHTTPServer "$FRONTEND_PORT" &
-        FRONTEND_PID=$!
-        cd "$RELEASE_DIR"
-        info "  ✓ Frontend via python2 (PID: $FRONTEND_PID)"
-    elif command -v busybox &>/dev/null; then
-        busybox httpd -f -p "$FRONTEND_PORT" -h "$RELEASE_DIR/frontend" &
-        FRONTEND_PID=$!
-        info "  ✓ Frontend via busybox (PID: $FRONTEND_PID)"
-    else
-        error "No HTTP server found (python3/python/busybox). Install one."
-        exit 1
-    fi
-else
-    error "No index.html in frontend/ — build may have failed"
-    exit 1
-fi
+IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
 echo ""
 info "============================================"
 info "  App is running!"
 info ""
-info "  Frontend:  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):${FRONTEND_PORT}"
-info "  Backend:   http://localhost:${BACKEND_PORT}"
+info "  http://${IP}:${PORT}"
 info ""
-info "  Press Ctrl+C to stop both services"
+info "  Press Ctrl+C to stop"
 info "============================================"
 echo ""
 
-# Wait for either process to exit
 wait
 RUNSCRIPT
 
