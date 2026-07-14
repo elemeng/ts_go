@@ -57,6 +57,7 @@ info "  → Backend binary: $(du -h target/release/ts-sv-backend | cut -f1)"
 # Step 2: Build static frontend
 info "Building static frontend..."
 cd "$PROJECT_ROOT/frontend"
+rm -rf .next out  # fresh build, no stale cache
 
 if [ -n "$API_BASE" ]; then
     info "  API_BASE=$API_BASE"
