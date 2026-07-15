@@ -1,13 +1,12 @@
-'use client';
+"use client";
 
-import { useState, useCallback } from 'react';
-import { useAppState } from '@/lib/store';
-import type { Frame, TiltSeries } from '@/lib/types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Slider } from '@/components/ui/slider';
-import { FrameThumbnail } from './frame-thumbnail';
+import { useCallback, useState } from "react";
+import { useAppState } from "@/lib/store";
+import type { Frame, TiltSeries } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FrameThumbnail } from "./frame-thumbnail";
 
 interface TiltSeriesCardProps {
   ts: TiltSeries;
@@ -19,9 +18,10 @@ interface TiltSeriesCardProps {
   onSelectAll: (select: boolean) => void;
   onInvert: () => void;
   onReset: () => void;
-  onQuickFilter: (preset: 'center' | 'edges' | 'alternate' | 'all' | 'none') => void;
+  onQuickFilter: (
+    preset: "center" | "edges" | "alternate" | "all" | "none",
+  ) => void;
   onFrameToggle: (frame: Frame) => void;
-  onThumbSizeChange: (size: number) => void;
 }
 
 export function TiltSeriesCard({
@@ -36,18 +36,18 @@ export function TiltSeriesCard({
   onReset,
   onQuickFilter,
   onFrameToggle,
-  onThumbSizeChange,
 }: TiltSeriesCardProps) {
   const { getFrameSelection } = useAppState();
   const [visibleFrames, setVisibleFrames] = useState<Set<string>>(new Set());
 
-  const selectedCount = ts.frames.filter((f) =>
-    getFrameSelection(ts.mdocPath, f.zIndex, f.selected)
-  ).length;
+  const selectedCount =
+    ts.frames.filter((f) =>
+      getFrameSelection(ts.mdocPath, f.zIndex, f.selected)
+    ).length;
 
   const isFrameVisible = useCallback(
     (tsId: string, zIndex: number) => visibleFrames.has(`${tsId}_${zIndex}`),
-    [visibleFrames]
+    [visibleFrames],
   );
 
   const setFrameVisible = useCallback((tsId: string, zIndex: number) => {
@@ -65,37 +65,32 @@ export function TiltSeriesCard({
               onCheckedChange={onToggleSelection}
             />
             <Button variant="ghost" size="sm" onClick={onToggle}>
-              {isExpanded ? '▼' : '▶'}
+              {isExpanded ? "▼" : "▶"}
             </Button>
             <div>
               <h2 className="text-lg font-semibold">{ts.id}</h2>
               <p className="text-sm text-muted-foreground">
-                {ts.frames.length} frames | {ts.angleRange[0]}° → {ts.angleRange[1]}°
+                {ts.frames.length} frames | {ts.angleRange[0]}° →{" "}
+                {ts.angleRange[1]}°
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">☑ {selectedCount} / {ts.frames.length}</Badge>
+            <Badge variant="outline">
+              ☑ {selectedCount} / {ts.frames.length}
+            </Badge>
           </div>
         </div>
 
         {/* Expanded controls */}
         {isExpanded && (
-          <div className="mt-2 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <span className="text-xs text-muted-foreground">Width:</span>
-              <Slider
-                value={thumbSize}
-                onValueChange={(value) => onThumbSizeChange(Number(value))}
-                min={64}
-                max={1024}
-                step={8}
-                className="w-32"
-              />
-              <span className="text-xs text-muted-foreground">{thumbSize}px</span>
-            </div>
+          <div className="mt-2 flex items-center justify-end gap-4">
             <div className="flex gap-1">
-              <Button variant="outline" size="sm" onClick={() => onSelectAll(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onSelectAll(true)}
+              >
                 ☑ All
               </Button>
               <Button variant="outline" size="sm" onClick={onInvert}>
@@ -104,13 +99,25 @@ export function TiltSeriesCard({
               <Button variant="ghost" size="sm" onClick={onReset}>
                 ↺ Reset
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onQuickFilter('center')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onQuickFilter("center")}
+              >
                 Center
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onQuickFilter('edges')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onQuickFilter("edges")}
+              >
                 Edges
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onQuickFilter('alternate')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onQuickFilter("alternate")}
+              >
                 Alternate
               </Button>
             </div>
@@ -124,7 +131,8 @@ export function TiltSeriesCard({
           <div
             className="grid gap-2"
             style={{
-              gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`,
+              gridTemplateColumns:
+                `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`,
             }}
           >
             {ts.frames.map((frame) => (
@@ -132,7 +140,11 @@ export function TiltSeriesCard({
                 key={frame.zIndex}
                 tsId={ts.id}
                 frame={frame}
-                isSelected={getFrameSelection(ts.mdocPath, frame.zIndex, frame.selected)}
+                isSelected={getFrameSelection(
+                  ts.mdocPath,
+                  frame.zIndex,
+                  frame.selected,
+                )}
                 thumbSize={thumbSize}
                 isVisible={isFrameVisible(ts.id, frame.zIndex)}
                 onVisible={() => setFrameVisible(ts.id, frame.zIndex)}

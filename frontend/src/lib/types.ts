@@ -36,6 +36,8 @@ export interface PngCacheItem {
   data: Blob;
   timestamp: number;
   size: number;
+  mrcPath: string;
+  pngMtime: number;
 }
 
 /** Result from saveAll API */

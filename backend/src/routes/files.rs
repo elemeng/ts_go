@@ -46,27 +46,27 @@ async fn list_directory(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let path_str = params.path.unwrap_or_else(|| "/data".to_string());
     let dir_path = std::path::absolute(Path::new(&path_str))
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")))?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid path: {e}")))?;
 
     if !dir_path.exists() {
         return Err((
             StatusCode::NOT_FOUND,
-            format!("Directory not found: {path_str}"),
+            format!("directory not found: {path_str}"),
         ));
     }
     if !dir_path.is_dir() {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("Not a directory: {path_str}"),
+            format!("not a directory: {path_str}"),
         ));
     }
 
     let mut entries = Vec::new();
     let mut read_dir = std::fs::read_dir(&dir_path)
-        .map_err(|e| (StatusCode::FORBIDDEN, format!("Permission denied: {e}")))?;
+        .map_err(|e| (StatusCode::FORBIDDEN, format!("permission denied: {e}")))?;
 
     while let Some(entry) = read_dir.next().transpose().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Read error: {e}"))
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("read error: {e}"))
     })? {
         let name = entry.file_name().to_string_lossy().to_string();
         let file_type = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -115,14 +115,14 @@ async fn save_config(
     let content = serde_json::to_string_pretty(&config).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Serialization error: {e}"),
+            format!("serialization error: {e}"),
         )
     })?;
 
     std::fs::write(&config_path, &content).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save config: {e}"),
+            format!("failed to save config: {e}"),
         )
     })?;
 
@@ -141,21 +141,21 @@ async fn load_config(
     if !config_path.exists() {
         return Err((
             StatusCode::NOT_FOUND,
-            format!("Config not found: {}", params.filename),
+            format!("config not found: {}", params.filename),
         ));
     }
 
     let content = std::fs::read_to_string(&config_path).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read config: {e}"),
+            format!("failed to read config: {e}"),
         )
     })?;
 
     let config: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to parse config: {e}"),
+            format!("failed to parse config: {e}"),
         )
     })?;
 
@@ -188,14 +188,14 @@ async fn delete_config(
     if !config_path.exists() {
         return Err((
             StatusCode::NOT_FOUND,
-            format!("Config not found: {}", params.filename),
+            format!("config not found: {}", params.filename),
         ));
     }
 
     std::fs::remove_file(&config_path).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete config: {e}"),
+            format!("failed to delete config: {e}"),
         )
     })?;
 

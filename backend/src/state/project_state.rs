@@ -38,14 +38,7 @@ impl ProjectState {
 
     pub async fn remove_tilt_series_by_mdoc_path(&self, mdoc_path: &str) {
         let mut ts_map = self.tilt_series.write().await;
-        let to_remove: Vec<String> = ts_map
-            .iter()
-            .filter(|(_, ts)| ts.mdoc_path == mdoc_path)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in to_remove {
-            ts_map.remove(&id);
-        }
+        ts_map.retain(|_, ts| ts.mdoc_path != mdoc_path);
     }
 
     pub async fn update_tilt_series_frames(
@@ -93,4 +86,4 @@ impl ProjectState {
 }
 
 /// Global project state instance
-pub static PROJECT_STATE: LazyLock<ProjectState> = LazyLock::new(|| ProjectState::new());
+pub static PROJECT_STATE: LazyLock<ProjectState> = LazyLock::new(ProjectState::new);

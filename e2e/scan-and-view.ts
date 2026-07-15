@@ -115,13 +115,13 @@ async function main() {
     await page.fill("#mdoc_dir", TEST_MDOC);
     console.log(`[e2e] Filling image_dir: ${TEST_MRC}`);
     await page.fill("#image_dir", TEST_MRC);
-    await page.fill("#png_dir", "/tmp/ts-go-e2e-png");
+    await page.fill("#png_dir", `${PROJECT_ROOT}/test/png_e2e`);
 
     // 10. Click Scan button
     console.log("[e2e] Clicking Scan button...");
     await page.click('button:has-text("Scan"):not(:has-text("Project"))');
 
-    // 11. Wait for scan to complete - look for Position_1_4 heading
+    // 11. Wait for scan to complete - look for tilt series headings
     console.log("[e2e] Waiting for scan results...");
     try {
       await page.waitForSelector("h2:has-text('Position_1_4')", { timeout: 30000 });
@@ -136,41 +136,55 @@ async function main() {
 
     await delay(2000); // let thumbnails start loading
 
-    // 12. Count images
+    // 12. Count all <img> elements (including SVG placeholders and real PNGs)
     const images = page.locator("img");
     const imgCount = await images.count();
     console.log(`[e2e] Total <img> elements: ${imgCount}`);
 
-    // 13. Wait for real PNGs (blob URLs from loaded previews)
+    // 13. Wait for real PNGs (blob: URLs from MRC→PNG pipeline)
+    //     Position_1_4 has 12 matching .mrc files in test/mrc/,
+    //     so at least 12 frames should show real PNG images.
     let realImages = 0;
-    for (let attempt = 0; attempt < 10 && realImages === 0; attempt++) {
+    let hasSvgPlaceholder = false;
+    for (let attempt = 0; attempt < 15 && (realImages < 12 || !hasSvgPlaceholder); attempt++) {
       realImages = 0;
+      hasSvgPlaceholder = false;
       for (let i = 0; i < imgCount; i++) {
         const src = await images.nth(i).getAttribute("src");
-        if (src && src.startsWith("blob:")) realImages++;
+        if (src) {
+          if (src.startsWith("blob:")) realImages++;
+          if (src.startsWith("data:image/svg+xml")) hasSvgPlaceholder = true;
+        }
       }
-      if (realImages === 0) {
-        console.log(`[e2e] Waiting for PNGs... (attempt ${attempt + 1})`);
+      if (realImages < 12 || !hasSvgPlaceholder) {
+        console.log(`[e2e] Waiting for PNGs... (attempt ${attempt + 1}/15: ${realImages} real, SVG placeholders: ${hasSvgPlaceholder})`);
         await delay(2000);
       }
     }
 
-    console.log(`[e2e] Real PNG thumbnails loaded: ${realImages}`);
+    console.log(`[e2e] MRC-derived PNG thumbnails: ${realImages} (expected >= 12)`);
+    console.log(`[e2e] SVG placeholders present for unmatched frames: ${hasSvgPlaceholder}`);
 
-    // 14. Verify preview API directly (smoke test)
+    // Assertions
+    if (realImages < 12) {
+      await page.screenshot({ path: "/tmp/ts-go-e2e-too-few-pngs.png", fullPage: true });
+      throw new Error(
+        `Expected at least 12 real PNGs from MRC files, but only ${realImages} found`
+      );
+    }
+
+    // 14. Verify preview API directly — confirm MRC→PNG encoding works
     const previewRes = await fetch(
-      `http://localhost:${BACKEND_PORT}/api/preview/Position_1_4/0?bin=8`,
+      `http://localhost:${BACKEND_PORT}/api/preview/Position_1_13/6?bin=8`,
     );
     if (previewRes.ok) {
       const blob = await previewRes.blob();
-      console.log(`[e2e] ✅ Preview API: HTTP 200, ${blob.size} bytes`);
+      console.log(`[e2e] ✅ Preview API: HTTP 200, ${blob.size} bytes (from MRC Position_1_13 frame 6)`);
+      if (blob.size < 100) {
+        throw new Error(`PNG too small (${blob.size} bytes), likely corrupt`);
+      }
     } else {
       throw new Error(`Preview API returned ${previewRes.status}`);
-    }
-
-    if (realImages === 0) {
-      await page.screenshot({ path: "/tmp/ts-go-e2e-no-pngs.png", fullPage: true });
-      throw new Error("No real PNG thumbnails loaded");
     }
 
     console.log("[e2e] ✅ ALL E2E TESTS PASSED");

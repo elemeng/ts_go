@@ -22,76 +22,13 @@ fn read_mrc(path: &str) -> Option<Array2<f32>> {
     let header = reader.header();
     let nx = header.nx as usize;
     let ny = header.ny as usize;
-    let mode = header.mode;
-
-    // Try to read as f32 directly (common mode 2)
-    if let Ok(block) = reader.read_volume::<f32>() {
-        let slice_len = nx * ny;
-        let flat: Vec<f32> = block.data.iter().take(slice_len).copied().collect();
-        if flat.len() != nx * ny {
-            return None;
-        }
-        return Some(Array2::from_shape_vec((ny, nx), flat).ok()?);
+    let block = reader.convert::<f32>().read_volume().ok()?;
+    let slice_len = nx * ny;
+    let flat: Vec<f32> = block.data.into_iter().take(slice_len).collect();
+    if flat.len() != slice_len {
+        return None;
     }
-
-    // Re-open and try the file's native mode
-    let reader = mrc::Reader::open(path).ok()?;
-
-    match mode {
-        12 => { // Float16
-            // Float16 (half precision) — read as f16, convert to f32
-            let block = reader.read_volume::<mrc::f16>().ok()?;
-            let slice_len = nx * ny;
-            let flat: Vec<f32> = block.data.iter()
-                .take(slice_len)
-                .map(|v| f32::from(*v))
-                .collect();
-            if flat.len() != nx * ny {
-                return None;
-            }
-            Some(Array2::from_shape_vec((ny, nx), flat).ok()?)
-        }
-        1 => { // Int16
-            let block = reader.read_volume::<i16>().ok()?;
-            let slice_len = nx * ny;
-            let flat: Vec<f32> = block.data.iter()
-                .take(slice_len)
-                .map(|&v| v as f32)
-                .collect();
-            if flat.len() != nx * ny {
-                return None;
-            }
-            Some(Array2::from_shape_vec((ny, nx), flat).ok()?)
-        }
-        6 => { // Uint16
-            let block = reader.read_volume::<u16>().ok()?;
-            let slice_len = nx * ny;
-            let flat: Vec<f32> = block.data.iter()
-                .take(slice_len)
-                .map(|&v| v as f32)
-                .collect();
-            if flat.len() != nx * ny {
-                return None;
-            }
-            Some(Array2::from_shape_vec((ny, nx), flat).ok()?)
-        }
-        0 => { // Int8
-            let block = reader.read_volume::<i8>().ok()?;
-            let slice_len = nx * ny;
-            let flat: Vec<f32> = block.data.iter()
-                .take(slice_len)
-                .map(|&v| v as f32)
-                .collect();
-            if flat.len() != nx * ny {
-                return None;
-            }
-            Some(Array2::from_shape_vec((ny, nx), flat).ok()?)
-        }
-        other => {
-            eprintln!("Unsupported MRC mode: {other}");
-            None
-        }
-    }
+    Array2::from_shape_vec((ny, nx), flat).ok()
 }
 
 fn read_tiff(path: &str) -> Option<Array2<f32>> {
@@ -99,5 +36,5 @@ fn read_tiff(path: &str) -> Option<Array2<f32>> {
     let gray = img.to_luma32f();
     let (width, height) = gray.dimensions();
     let data: Vec<f32> = gray.into_raw();
-    Some(Array2::from_shape_vec((height as usize, width as usize), data).ok()?)
+    Array2::from_shape_vec((height as usize, width as usize), data).ok()
 }

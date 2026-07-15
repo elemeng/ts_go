@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::mdoc::parser::parse_mdoc_file;
-use crate::mdoc::writer::write_mdoc_with_selections;
+use crate::mdoc::writer::{create_timestamped_backup, write_mdoc_with_selections};
 use crate::matcher::cut_match::ImageMatcher;
 use crate::models::types::{
     BatchSaveRequest, BatchSaveResponse, BackupDeleteResponse, DeleteAllRequest,
@@ -87,7 +87,7 @@ async fn get_tilt_series(AxumPath(ts_id): AxumPath<String>) -> Result<Json<TiltS
         Some(ts) => Ok(Json(ts)),
         None => Err((
             axum::http::StatusCode::NOT_FOUND,
-            format!("Tilt series not found: {ts_id}"),
+            format!("tilt series not found: {ts_id}"),
         )),
     }
 }
@@ -146,10 +146,11 @@ async fn delete_all(Json(request): Json<DeleteAllRequest>) -> Json<Value> {
             continue;
         }
 
-        // Create backup
-        let backup = mdoc_path.with_extension("mdoc.bak");
-        match std::fs::copy(mdoc_path, &backup) {
-            Ok(_) => {
+        // Create a timestamped backup and then delete the original.
+        // We never overwrite `.mdoc.bak`; the permanent original snapshot
+        // (created on first save) stays untouched.
+        match create_timestamped_backup(mdoc_path) {
+            Ok(_backup) => {
                 // Delete original
                 match std::fs::remove_file(mdoc_path) {
                     Ok(_) => {
@@ -185,7 +186,7 @@ async fn batch_save(Json(request): Json<BatchSaveRequest>) -> Result<Json<BatchS
     let ts = ts.ok_or_else(|| {
         (
             axum::http::StatusCode::NOT_FOUND,
-            format!("Tilt series not found: {}", request.mdoc_path),
+            format!("tilt series not found: {}", request.mdoc_path),
         )
     })?;
 
@@ -206,7 +207,7 @@ async fn batch_save(Json(request): Json<BatchSaveRequest>) -> Result<Json<BatchS
         }
         Err(e) => Err((
             axum::http::StatusCode::CONFLICT,
-            format!("Save failed: {e}"),
+            format!("save failed: {e}"),
         )),
     }
 }
@@ -220,18 +221,17 @@ async fn backup_delete(Json(request): Json<BackupDeleteRequest>) -> Result<Json<
         ));
     }
 
-    let backup = mdoc_path.with_extension("mdoc.bak");
-    std::fs::copy(mdoc_path, &backup).map_err(|e| {
+    let backup = create_timestamped_backup(mdoc_path).map_err(|e| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Backup failed: {e}"),
+            format!("backup failed: {e}"),
         )
     })?;
 
     std::fs::remove_file(mdoc_path).map_err(|e| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Delete failed: {e}"),
+            format!("delete failed: {e}"),
         )
     })?;
 

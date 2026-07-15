@@ -8,23 +8,24 @@ use serde::{Deserialize, Serialize};
 /// - mrc_path: Path to the MRC file containing this frame
 /// - selected: Current selection state (mutable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Frame {
-    #[serde(rename = "zIndex")]
     pub z_index: i32,
     pub angle: f64,
-    #[serde(rename = "mrcPath")]
     pub mrc_path: String,
     pub selected: bool,
+    /// Source MRC file modification time (epoch seconds). Used by the frontend
+    /// to validate whether a cached PNG is still fresh for this source file.
+    pub mrc_mtime: u64,
 }
 
 /// Represents a complete tilt series from an mdoc file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TiltSeries {
     pub id: String,
-    #[serde(rename = "mdocPath")]
     pub mdoc_path: String,
     pub frames: Vec<Frame>,
-    #[serde(rename = "angleRange")]
     pub angle_range: (f64, f64),
 }
 

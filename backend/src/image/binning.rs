@@ -3,7 +3,7 @@ use ndarray::Array2;
 /// Bin downsample array by averaging blocks.
 /// `factor` must be a positive integer.
 /// Returns a new array with dimensions reduced by factor.
-pub fn bin_ndarray(arr: &Array2<f64>, factor: usize) -> Array2<f64> {
+pub fn bin_ndarray(arr: &Array2<f32>, factor: usize) -> Array2<f32> {
     if factor <= 1 {
         return arr.clone();
     }
@@ -16,17 +16,12 @@ pub fn bin_ndarray(arr: &Array2<f64>, factor: usize) -> Array2<f64> {
     let h_new = h_trim / factor;
     let w_new = w_trim / factor;
 
-    let mut binned = Array2::<f64>::zeros((h_new, w_new));
-    for i in 0..h_new {
-        for j in 0..w_new {
-            let mut sum = 0.0;
-            for di in 0..factor {
-                for dj in 0..factor {
-                    sum += arr[[i * factor + di, j * factor + dj]];
-                }
-            }
-            binned[[i, j]] = sum / (factor * factor) as f64;
-        }
+    let mut binned = Array2::<f32>::zeros((h_new, w_new));
+    for (chunk, cell) in arr.exact_chunks((factor, factor))
+        .into_iter()
+        .zip(binned.iter_mut())
+    {
+        *cell = chunk.mean().unwrap_or(0.0);
     }
 
     binned

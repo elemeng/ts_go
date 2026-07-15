@@ -17,7 +17,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "CryoET Tilt Series Curator",
-  description: "A modern, full-stack web application for Cryo-ET tilt series filtering, inspection, and visualization.",
+  description:
+    "A modern, full-stack web application for Cryo-ET tilt series filtering, inspection, and visualization.",
 };
 
 export default function RootLayout({
@@ -26,8 +27,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
+      >
         <TooltipProvider>
           <AppProvider>
             {children}

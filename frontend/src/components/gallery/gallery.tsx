@@ -1,16 +1,17 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { toast } from 'sonner';
-import { useAppState } from '@/lib/store';
-import { scanProject, saveAll } from '@/lib/api';
-import { cacheAllMdocs, clearCache } from '@/lib/cache';
-import { TiltSeriesCard } from './tilt-series-card';
-import { ScanDialog } from './scan-dialog';
-import { CacheManager } from './cache-manager';
-import type { ScanConfig, TiltSeries } from '@/lib/types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import { useAppState } from "@/lib/store";
+import { saveAll, scanProject } from "@/lib/api";
+import { cacheAllMdocs, clearCache, validateTsCache } from "@/lib/cache";
+import { TiltSeriesCard } from "./tilt-series-card";
+import { ScanDialog } from "./scan-dialog";
+import { CacheManager } from "./cache-manager";
+import type { ScanConfig, TiltSeries } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 
 export function Gallery() {
   const {
@@ -30,20 +31,31 @@ export function Gallery() {
   const [isSaving, setIsSaving] = useState(false);
   const [showScanDialog, setShowScanDialog] = useState(false);
   const [isCaching, setIsCaching] = useState(false);
-  const [cacheProgress, setCacheProgress] = useState({ cached: 0, total: 0, currentTs: '' });
+  const [cacheProgress, setCacheProgress] = useState({
+    cached: 0,
+    total: 0,
+    currentTs: "",
+  });
 
   // Load persisted state on mount
   useEffect(() => {
     // Load thumbSize
     try {
-      const saved = localStorage.getItem('gallery_thumbSize');
+      const saved = localStorage.getItem("gallery_thumbSize");
       if (saved) setThumbSize(parseInt(saved, 10));
     } catch {}
   }, []);
 
+  // Validate cached PNGs after restoring persisted tilt series.
+  useEffect(() => {
+    for (const ts of tiltSeries) {
+      validateTsCache(ts, 8, 90).catch(() => {});
+    }
+  }, [tiltSeries]);
+
   // Save thumbSize
   useEffect(() => {
-    localStorage.setItem('gallery_thumbSize', thumbSize.toString());
+    localStorage.setItem("gallery_thumbSize", thumbSize.toString());
   }, [thumbSize]);
 
   // Expand all when tilt series load
@@ -83,9 +95,11 @@ export function Gallery() {
   }, []);
 
   const applyBatchFilter = useCallback(
-    (preset: 'center' | 'edges' | 'alternate' | 'all' | 'none') => {
+    (preset: "center" | "edges" | "alternate" | "all" | "none") => {
       if (selectedTsIds.size === 0) {
-        toast.warning('No tilt series selected', { description: 'Select one or more TS first' });
+        toast.warning("No tilt series selected", {
+          description: "Select one or more TS first",
+        });
         return;
       }
 
@@ -98,43 +112,52 @@ export function Gallery() {
       }
       toast.success(`Applied ${preset} filter to ${applied} tilt series`);
     },
-    [tiltSeries, selectedTsIds]
+    [tiltSeries, selectedTsIds],
   );
 
   const applyQuickFilter = useCallback(
-    (ts: TiltSeries, preset: 'center' | 'edges' | 'alternate' | 'all' | 'none') => {
+    (
+      ts: TiltSeries,
+      preset: "center" | "edges" | "alternate" | "all" | "none",
+    ) => {
       const selectionsMap = new Map<number, boolean>();
       const totalFrames = ts.frames.length;
 
       switch (preset) {
-        case 'center': {
+        case "center": {
           const start = Math.floor(totalFrames * 0.2);
           const end = Math.ceil(totalFrames * 0.8);
           for (const frame of ts.frames) {
-            selectionsMap.set(frame.zIndex, frame.zIndex >= start && frame.zIndex <= end);
+            selectionsMap.set(
+              frame.zIndex,
+              frame.zIndex >= start && frame.zIndex <= end,
+            );
           }
           break;
         }
-        case 'edges': {
+        case "edges": {
           const edgeSize = Math.floor(totalFrames * 0.2);
           for (const frame of ts.frames) {
-            selectionsMap.set(frame.zIndex, frame.zIndex < edgeSize || frame.zIndex >= totalFrames - edgeSize);
+            selectionsMap.set(
+              frame.zIndex,
+              frame.zIndex < edgeSize || frame.zIndex >= totalFrames - edgeSize,
+            );
           }
           break;
         }
-        case 'alternate': {
+        case "alternate": {
           for (const frame of ts.frames) {
             selectionsMap.set(frame.zIndex, frame.zIndex % 2 === 0);
           }
           break;
         }
-        case 'all': {
+        case "all": {
           for (const frame of ts.frames) {
             selectionsMap.set(frame.zIndex, true);
           }
           break;
         }
-        case 'none': {
+        case "none": {
           for (const frame of ts.frames) {
             selectionsMap.set(frame.zIndex, false);
           }
@@ -145,7 +168,7 @@ export function Gallery() {
       setBatchSelection(ts.mdocPath, selectionsMap);
       toast.success(`Applied ${preset} filter`, { description: ts.id });
     },
-    [setBatchSelection]
+    [setBatchSelection],
   );
 
   const handleScan = useCallback(
@@ -154,17 +177,23 @@ export function Gallery() {
         const series = await scanProject(config);
         setTiltSeries(series);
         setShowScanDialog(false);
+        // Evict cached PNGs whose backend disk mtime has changed.
+        for (const ts of series) {
+          validateTsCache(ts, 8, 90).catch(() => {});
+        }
         toast.success(`Scanned ${series.length} tilt series`);
       } catch (e) {
-        toast.error('Scan failed', { description: e instanceof Error ? e.message : 'Unknown error' });
+        toast.error("Scan failed", {
+          description: e instanceof Error ? e.message : "Unknown error",
+        });
       }
     },
-    [setTiltSeries]
+    [setTiltSeries],
   );
 
   const handleSaveAll = useCallback(async () => {
     if (tiltSeries.length === 0) {
-      toast.info('No tilt series loaded');
+      toast.info("No tilt series loaded");
       return;
     }
 
@@ -178,7 +207,7 @@ export function Gallery() {
       }
 
       if (selections.size === 0 && deletePaths.length === 0) {
-        toast.info('No changes to save');
+        toast.info("No changes to save");
         return;
       }
 
@@ -194,45 +223,68 @@ export function Gallery() {
       clearAllSelections();
 
       if (result.failed.length > 0) {
-        toast.error(`Saved ${result.saved.length}, deleted ${result.deleted.length}`, {
-          description: `Failed: ${result.failed.slice(0, 3).join(', ')}${result.failed.length > 3 ? '...' : ''}`,
-        });
+        toast.error(
+          `Saved ${result.saved.length}, deleted ${result.deleted.length}`,
+          {
+            description: `Failed: ${result.failed.slice(0, 3).join(", ")}${
+              result.failed.length > 3 ? "..." : ""
+            }`,
+          },
+        );
       } else {
-        toast.success(`Saved ${result.saved.length} tilt series, deleted ${result.deleted.length} mdocs`);
+        toast.success(
+          `Saved ${result.saved.length} tilt series, deleted ${result.deleted.length} mdocs`,
+        );
       }
     } catch (e) {
-      toast.error('Save failed', { description: e instanceof Error ? e.message : 'Unknown error' });
+      toast.error("Save failed", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
     } finally {
       setIsSaving(false);
     }
-  }, [tiltSeries, selections, selectedTsIds, setTiltSeries, clearAllSelections]);
+  }, [
+    tiltSeries,
+    selections,
+    selectedTsIds,
+    setTiltSeries,
+    clearAllSelections,
+  ]);
 
   const handleCacheAll = useCallback(async () => {
     if (tiltSeries.length === 0) {
-      toast.warning('No tilt series loaded', { description: 'Scan a project first' });
+      toast.warning("No tilt series loaded", {
+        description: "Scan a project first",
+      });
       return;
     }
 
     setIsCaching(true);
     try {
       const result = await cacheAllMdocs(tiltSeries, (progress) => {
-        setCacheProgress({ cached: progress.current, total: progress.total, currentTs: progress.currentTs });
+        setCacheProgress({
+          cached: progress.current,
+          total: progress.total,
+          currentTs: progress.currentTs,
+        });
       });
       toast.success(
         `Cache complete: ${result.success}/${result.total} PNGs cached` +
-        (result.failed ? ` (${result.failed} failed)` : '')
+          (result.failed ? ` (${result.failed} failed)` : ""),
       );
     } catch (e) {
-      toast.error('Cache failed', { description: e instanceof Error ? e.message : 'Unknown error' });
+      toast.error("Cache failed", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
     } finally {
       setIsCaching(false);
-      setCacheProgress({ cached: 0, total: 0, currentTs: '' });
+      setCacheProgress({ cached: 0, total: 0, currentTs: "" });
     }
   }, [tiltSeries]);
 
   const handleClearCache = useCallback(async () => {
     await clearCache();
-    toast.success('All cached PNGs deleted');
+    toast.success("All cached PNGs deleted");
   }, []);
 
   const getSelectedCount = useCallback(
@@ -245,15 +297,19 @@ export function Gallery() {
       }
       return count;
     },
-    [getFrameSelection]
+    [getFrameSelection],
   );
 
   const stats = {
     totalSeries: tiltSeries.length,
     totalFrames: tiltSeries.reduce((sum, ts) => sum + ts.frames.length, 0),
     selectedFrames: tiltSeries.reduce(
-      (sum, ts) => sum + ts.frames.filter((f) => getFrameSelection(ts.mdocPath, f.zIndex, f.selected)).length,
-      0
+      (sum, ts) =>
+        sum +
+        ts.frames.filter((f) =>
+          getFrameSelection(ts.mdocPath, f.zIndex, f.selected)
+        ).length,
+      0,
     ),
   };
 
@@ -264,7 +320,11 @@ export function Gallery() {
         <div className="flex flex-wrap items-center gap-2 px-4 py-2">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-bold">CryoET Gallery</h1>
-            <Button variant="default" size="sm" onClick={() => setShowScanDialog(true)}>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setShowScanDialog(true)}
+            >
               Scan Project
             </Button>
           </div>
@@ -279,10 +339,19 @@ export function Gallery() {
               </Button>
             </div>
             <div className="flex gap-1">
-              <Button variant="outline" size="sm" onClick={() => setSelectedTsIds(new Set(tiltSeries.map((t) => t.id)))}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setSelectedTsIds(new Set(tiltSeries.map((t) => t.id)))}
+              >
                 ☑ All
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setSelectedTsIds(new Set())}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedTsIds(new Set())}
+              >
                 ☐ Clear
               </Button>
             </div>
@@ -290,14 +359,33 @@ export function Gallery() {
 
           <div className="flex items-center gap-2">
             <Badge variant="outline">{stats.totalSeries} TS</Badge>
+            <div className="flex items-center gap-2 px-2">
+              <span className="text-xs text-muted-foreground">Zoom:</span>
+              <Slider
+                value={thumbSize}
+                onValueChange={(value) => setThumbSize(Number(value))}
+                min={64}
+                max={1024}
+                step={8}
+                className="w-32"
+              />
+              <span className="text-xs text-muted-foreground">
+                {thumbSize}px
+              </span>
+            </div>
             <CacheManager
               onCacheAll={handleCacheAll}
               onClearCache={handleClearCache}
               isCaching={isCaching}
               cacheProgress={cacheProgress}
             />
-            <Button variant="default" size="sm" onClick={handleSaveAll} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save All'}
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleSaveAll}
+              disabled={isSaving}
+            >
+              {isSaving ? "Saving..." : "Save All"}
             </Button>
           </div>
         </div>
@@ -308,15 +396,29 @@ export function Gallery() {
         {/* Batch operations */}
         {selectedTsIds.size > 0 && (
           <div className="mb-4 flex items-center gap-2">
-            <span className="text-sm font-medium">{selectedTsIds.size} TS selected</span>
+            <span className="text-sm font-medium">
+              {selectedTsIds.size} TS selected
+            </span>
             <div className="flex gap-1">
-              <Button variant="outline" size="sm" onClick={() => applyBatchFilter('all')}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => applyBatchFilter("all")}
+              >
                 ☑ All
               </Button>
-              <Button variant="outline" size="sm" onClick={() => applyBatchFilter('none')}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => applyBatchFilter("none")}
+              >
                 ☐ None
               </Button>
-              <Button variant="outline" size="sm" onClick={() => applyBatchFilter('alternate')}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => applyBatchFilter("alternate")}
+              >
                 ↻ Alternate
               </Button>
             </div>
@@ -355,7 +457,11 @@ export function Gallery() {
               onInvert={() => {
                 const map = new Map<number, boolean>();
                 for (const frame of ts.frames) {
-                  const current = getFrameSelection(ts.mdocPath, frame.zIndex, frame.selected);
+                  const current = getFrameSelection(
+                    ts.mdocPath,
+                    frame.zIndex,
+                    frame.selected,
+                  );
                   map.set(frame.zIndex, !current);
                 }
                 setBatchSelection(ts.mdocPath, map);
@@ -363,10 +469,13 @@ export function Gallery() {
               onReset={() => clearTsSelections(ts.mdocPath)}
               onQuickFilter={(preset) => applyQuickFilter(ts, preset)}
               onFrameToggle={(frame) => {
-                const current = getFrameSelection(ts.mdocPath, frame.zIndex, frame.selected);
+                const current = getFrameSelection(
+                  ts.mdocPath,
+                  frame.zIndex,
+                  frame.selected,
+                );
                 setFrameSelection(ts.mdocPath, frame.zIndex, !current);
               }}
-              onThumbSizeChange={setThumbSize}
             />
           ))}
         </div>
@@ -377,7 +486,11 @@ export function Gallery() {
             <p className="text-lg text-muted-foreground">
               No tilt series loaded. Configure and scan a project directory.
             </p>
-            <Button variant="default" className="mt-4" onClick={() => setShowScanDialog(true)}>
+            <Button
+              variant="default"
+              className="mt-4"
+              onClick={() => setShowScanDialog(true)}
+            >
               Scan Project
             </Button>
           </div>

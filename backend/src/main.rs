@@ -26,10 +26,10 @@ async fn main() {
     // Determine frontend directory: check binary parent, then cwd
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| {
         let exe = std::env::current_exe().ok();
-        if let Some(parent) = exe.and_then(|p| p.parent().map(|p| p.join("frontend"))) {
-            if parent.exists() {
-                return parent.to_string_lossy().to_string();
-            }
+        if let Some(parent) = exe.and_then(|p| p.parent().map(|p| p.join("frontend")))
+            && parent.exists()
+        {
+            return parent.to_string_lossy().to_string();
         }
         "frontend".to_string()
     });
@@ -57,7 +57,6 @@ async fn main() {
         // API endpoints
         .nest("/api/mdoc", routes::mdoc::router())
         .nest("/api/preview", routes::preview::router())
-        .nest("/api/project", routes::project::router())
         .nest("/api/files", routes::files::router())
         // Root-level routes (health check)
         .merge(routes::health::router())

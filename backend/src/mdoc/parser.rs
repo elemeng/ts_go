@@ -11,17 +11,17 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
     }
 
     let file = std::fs::File::open(mdoc_path)
-        .map_err(|e| format!("Failed to open mdoc file: {e}"))?;
+        .map_err(|e| format!("failed to open mdoc file: {e}"))?;
     let reader = std::io::BufReader::new(file);
 
     let mdoc = emdoc::Mdoc::from_reader(reader)
-        .map_err(|e| format!("Failed to parse mdoc file: {e}"))?;
+        .map_err(|e| format!("failed to parse mdoc file: {e}"))?;
 
     let mut frames: Vec<Frame> = Vec::new();
     let mut angles: Vec<f64> = Vec::new();
 
     for block in mdoc.blocks() {
-        let z_value = block.z() as i32;
+        let z_value = i32::try_from(block.z()).unwrap_or(0);
 
         // Parse TiltAngle
         let angle = block
@@ -32,7 +32,7 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
         angles.push(angle);
 
         // Parse SubFramePath and match to image file
-        let (mrc_path, matched) = block
+        let (mrc_path, matched, mrc_mtime) = block
             .get("SubFramePath")
             .map(|subframe_path| {
                 // Normalize path separators
@@ -52,8 +52,14 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
                     .match_filename(&filename_no_ext)
                     .or_else(|| matcher.match_filename(&filename))
                 {
-                    Some(path) => (path, true),
-                    None => (filename, false),
+                    Some(path) => {
+                        let mtime = std::fs::metadata(&path)
+                            .and_then(|m| m.modified())
+                            .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
+                            .unwrap_or(0);
+                        (path, true, mtime)
+                    }
+                    None => (filename, false, 0),
                 }
             })
             .unwrap_or_default();
@@ -63,11 +69,12 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
             angle,
             mrc_path,
             selected: matched,
+            mrc_mtime,
         });
     }
 
     if frames.is_empty() {
-        return Err(format!("No frames found in mdoc: {mdoc_path}"));
+        return Err(format!("no frames found in mdoc: {mdoc_path}"));
     }
 
     let angle_range = if angles.is_empty() {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import type { TiltSeries, SelectionState } from './types';
 
 interface AppState {
@@ -20,6 +20,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tiltSeries, setTiltSeriesState] = useState<TiltSeries[]>([]);
   const [selections, setSelections] = useState<SelectionState>(new Map());
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Hydration-safe localStorage restore — runs once on client after mount,
+  // avoiding React hydration mismatch (#418) between static HTML and client state.
+  useEffect(() => {
+    try {
+      const savedTs = localStorage.getItem('ts_tiltSeries');
+      if (savedTs) {
+        setTiltSeriesState(JSON.parse(savedTs));
+      }
+
+      const savedSel = localStorage.getItem('ts_selections');
+      if (savedSel) {
+        const parsed: Record<string, Record<number, boolean>> = JSON.parse(savedSel);
+        const selections = new Map<string, Map<number, boolean>>();
+        for (const [mdocPath, tsSelections] of Object.entries(parsed)) {
+          selections.set(mdocPath, new Map(Object.entries(tsSelections).map(([k, v]) => [Number(k), v])));
+        }
+        setSelections(selections);
+      }
+    } catch {
+      // Ignore corrupt localStorage data
+    }
+  }, []);
 
   const persistSelections = useCallback((state: SelectionState) => {
     // Debounced persist to localStorage

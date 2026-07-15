@@ -24,11 +24,30 @@ RELEASE_NAME="ts-go-$(date +%Y%m%d_%H%M%S)"
 # Add common tool locations to PATH
 export PATH="$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
 
+MUSL_TARGET="x86_64-unknown-linux-musl"
+
 # Check prerequisites
 info "Checking prerequisites..."
 if ! command -v cargo &>/dev/null; then
     error "Rust/Cargo not found. Install from https://rustup.rs/"
     exit 1
+fi
+
+# Set up musl target for fully static linking
+info "Setting up musl target for fully static binary..."
+if ! rustup target list --installed 2>/dev/null | grep -q "$MUSL_TARGET"; then
+    info "  Installing musl target (x86_64-unknown-linux-musl)..."
+    rustup target add "$MUSL_TARGET"
+fi
+
+# Check for musl-gcc linker
+MUSL_GCC=""
+if command -v musl-gcc &>/dev/null; then
+    MUSL_GCC="musl-gcc"
+    info "  Using musl-gcc for fully static linking"
+else
+    warn "  musl-gcc not found. Trying system gcc (may produce dynamically linked binary)."
+    warn "  For fully static linking, install: sudo apt install musl-tools  (or equivalent)"
 fi
 if ! command -v deno &>/dev/null; then
     warn "Deno not found. Trying npm/npx fallback..."
@@ -47,12 +66,21 @@ rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR/frontend"
 mkdir -p "$RELEASE_DIR/backend"
 
-# Step 1: Build Rust backend
-info "Building Rust backend (release)..."
+# Step 1: Build Rust backend (fully static with musl)
+info "Building Rust backend (release, musl static)..."
 cd "$PROJECT_ROOT/backend"
-cargo build --release
-cp target/release/ts-sv-backend "$RELEASE_DIR/backend/"
-info "  → Backend binary: $(du -h target/release/ts-sv-backend | cut -f1)"
+
+BUILD_ARGS=(build --release --target "$MUSL_TARGET")
+if [ -n "$MUSL_GCC" ]; then
+    CC_CMD="$MUSL_GCC" cargo "${BUILD_ARGS[@]}"
+else
+    cargo "${BUILD_ARGS[@]}"
+fi
+
+cp "target/$MUSL_TARGET/release/ts-sv-backend" "$RELEASE_DIR/backend/"
+info "  → Backend binary: $(du -h "target/$MUSL_TARGET/release/ts-sv-backend" | cut -f1)"
+info "  → Static linking check:"
+file "$RELEASE_DIR/backend/ts-sv-backend" | head -1
 
 # Step 2: Build static frontend
 info "Building static frontend..."
