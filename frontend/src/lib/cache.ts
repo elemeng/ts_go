@@ -7,7 +7,7 @@ const memoryCache = new Map<string, PngCacheItem>();
 
 // IndexedDB setup
 const DB_NAME = "TsSvCache";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "pngs";
 
 let db: IDBDatabase | null = null;
@@ -26,6 +26,12 @@ async function initDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = (event) => {
       const database = (event.target as IDBOpenDBRequest).result;
+      const oldVersion = event.oldVersion;
+      // Bump version to purge stale cache entries from previous key formats
+      // (old format: {tsId}_{zIndex}_bin{bin}_q{quality}, new format: {tsId}_{zIndex}_bin{bin})
+      if (oldVersion < 2 && database.objectStoreNames.contains(STORE_NAME)) {
+        database.deleteObjectStore(STORE_NAME);
+      }
       if (!database.objectStoreNames.contains(STORE_NAME)) {
         database.createObjectStore(STORE_NAME);
       }

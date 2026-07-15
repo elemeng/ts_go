@@ -16,6 +16,9 @@ interface AppState {
 
 const AppContext = createContext<AppState | null>(null);
 
+const STORAGE_VERSION_KEY = 'ts_storage_version';
+const CURRENT_STORAGE_VERSION = 2;
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tiltSeries, setTiltSeriesState] = useState<TiltSeries[]>([]);
   const [selections, setSelections] = useState<SelectionState>(new Map());
@@ -23,8 +26,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Hydration-safe localStorage restore — runs once on client after mount,
   // avoiding React hydration mismatch (#418) between static HTML and client state.
+  // Also purges stale persisted data on version mismatch (e.g. after cache key format changes).
   useEffect(() => {
     try {
+      const version = localStorage.getItem(STORAGE_VERSION_KEY);
+      if (version !== String(CURRENT_STORAGE_VERSION)) {
+        // Version mismatch — wipe old persisted data to avoid stale state
+        localStorage.removeItem('ts_tiltSeries');
+        localStorage.removeItem('ts_selections');
+        localStorage.setItem(STORAGE_VERSION_KEY, String(CURRENT_STORAGE_VERSION));
+        return;
+      }
+
       const savedTs = localStorage.getItem('ts_tiltSeries');
       if (savedTs) {
         setTiltSeriesState(JSON.parse(savedTs));
