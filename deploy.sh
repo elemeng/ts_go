@@ -13,13 +13,16 @@ readonly NC='\033[0m'
 
 # Project structure
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly FRONTEND_DIR="$PROJECT_ROOT"
+readonly FRONTEND_DIR="$PROJECT_ROOT/frontend"
 readonly BACKEND_DIR="$PROJECT_ROOT/backend"
 readonly LOGS_DIR="$PROJECT_ROOT/logs"
 
+# Ensure Deno and Cargo are on PATH
+export PATH="$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
+
 # Service configuration
 readonly FRONTEND_PORT=${FRONTEND_PORT:-5173}
-readonly BACKEND_PORT=${BACKEND_PORT:-8000}
+readonly BACKEND_PORT=${BACKEND_PORT:-8088}
 readonly FRONTEND_HOST=${FRONTEND_HOST:-0.0.0.0}
 readonly BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 
@@ -101,52 +104,21 @@ ensure_directories() {
 
 # ==================== BACKEND ENVIRONMENT SETUP ====================
 ensure_backend_environment() {
-    info "Ensuring backend environment..."
-
-    # Ensure uv is installed in user environment
-    if ! command -v uv &>/dev/null; then
-        info "Installing uv package manager..."
-        pip install uv || warn "Failed to install uv, continuing anyway..."
+    info "Checking Rust toolchain..."
+    if ! command -v cargo &>/dev/null; then
+        error "Rust/Cargo not found. Install from https://rustup.rs/"
+        exit 1
     fi
-
-    # Sync dependencies if needed (missing flag or pyproject newer)
-    # Run from project root to ensure uv operates in correct directory
+    info "Building backend (cargo build)..."
+    cd "$BACKEND_DIR"
+    cargo build --release 2>&1 | tail -5
     cd "$PROJECT_ROOT"
-    if ! uv sync; then
-        warn "uv sync failed or timed out, attempting to continue anyway..."
-    fi
-    cd - >/dev/null
+    return 0
 }
 
 # ==================== UPDATE .ENV FILE ====================
 update_env_file() {
-    info "Updating .env file with backend configuration..."
-
-    # Get the actual IP address that the backend will bind to
-    # If BACKEND_HOST is 0.0.0.0, we need to get the actual IP address
-    local api_host="$BACKEND_HOST"
-    if [ "$BACKEND_HOST" = "0.0.0.0" ]; then
-        # Try to get the primary IP address by filtering out localhost and loopback
-        # Use ip route to get the default gateway interface, then get its IP
-        if command -v ip &>/dev/null; then
-            local default_interface=$(ip route | grep default | awk '{print $5}' | head -1)
-            if [ -n "$default_interface" ]; then
-                api_host=$(ip addr show "$default_interface" | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1)
-            fi
-        fi
-
-        # Fallback to hostname -I if ip command failed
-        if [ -z "$api_host" ] || [ "$api_host" = "0.0.0.0" ]; then
-            api_host=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-        fi
-    fi
-
-    # Update or create .env file with the backend URL
-    cd "$PROJECT_ROOT"
-    cat > .env << EOF
-VITE_API_BASE=http://${api_host}:${BACKEND_PORT}
-EOF
-    info "  → API_BASE set to: http://${api_host}:${BACKEND_PORT}"
+    : # No-op: frontend uses relative API paths, no env file needed
 }
 
 # ==================== SMART SERVICE CONTROL ====================
@@ -167,19 +139,21 @@ start_frontend() {
         exit 1
     fi
     
-# Install dependencies if needed
     if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-        info "Installing frontend dependencies..."
-        if ! bun install --frozen-lockfile 2>/dev/null; then
-            if ! npm ci; then
-                warn "bun install and npm ci failed or timed out, attempting to continue anyway..."
-            fi
+        info "Installing frontend dependencies with Deno..."
+        cd "$FRONTEND_DIR"
+        if ! deno install --allow-scripts 2>/dev/null; then
+            warn "deno install failed, attempting with auto node_modules..."
+            deno install --allow-scripts --node-modules-dir=auto || warn "deno install failed, continuing anyway..."
         fi
+        cd "$PROJECT_ROOT"
     fi
 
     ensure_directories
-    nohup bun run dev --host "$FRONTEND_HOST" > "$FRONTEND_LOG" 2>&1 &
+    cd "$FRONTEND_DIR"
+    nohup npx next dev --host "$FRONTEND_HOST" -p "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
     local pid=$!
+    cd "$PROJECT_ROOT"
     
     # Verify process started
     sleep 1
@@ -226,13 +200,11 @@ start_backend() {
     fi
     
     ensure_backend_environment
-    
-    # Activate venv and start service
-    source ".venv/bin/activate"
+
     cd "$BACKEND_DIR"
-    nohup uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --reload > "$BACKEND_LOG" 2>&1 &
+    nohup cargo run --release > "$BACKEND_LOG" 2>&1 &
     local pid=$!
-    cd - >/dev/null
+    cd "$PROJECT_ROOT"
     
     # Verify process started
     sleep 1

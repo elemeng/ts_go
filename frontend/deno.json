@@ -1,0 +1,27 @@
+{
+  "tasks": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "unstable": [
+    "detect-cjs",
+    "node-globals",
+    "unsafe-proto",
+    "sloppy-imports"
+  ],
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "jsx": "preserve",
+    "jsxImportSource": "react",
+    "types": ["node"]
+  },
+  "fmt": {
+    "include": ["src/"]
+  },
+  "lint": {
+    "include": ["src/"]
+  }
+}

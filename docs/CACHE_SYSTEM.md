@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the caching architecture for PNG images, MDOC files, and application state in the CryoET Gallery application.
+This document describes the caching architecture for PNG images, MDOC files, and application state in the CryoET Tilt Series Curator.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ This document describes the caching architecture for PNG images, MDOC files, and
 
 ## PNG Cache System
 
-### Frontend Architecture (src/lib/store.ts)
+### Frontend Architecture (src/lib/cache.ts)
 
 #### Two-Tier Caching
 
@@ -134,7 +134,7 @@ export const cacheWarning = derived(
 )
 ```
 
-### Backend Architecture (backend/app/cache/lru.py)
+### Backend Architecture (backend/src/cache/lru.rs)
 
 #### LRU Cache
 
@@ -146,13 +146,13 @@ export const cacheWarning = derived(
 
 **Key Functions:**
 
-```python
-def get(ts_id: str, frame_id: int, bin: int, quality: int) -> Optional[bytes]
-def put(ts_id: str, frame_id: int, bin: int, quality: int, data: bytes)
-def clear()
+```rust
+pub fn get(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Option<Vec<u8>>
+pub fn put(ts_id: &str, frame_id: i32, bin: i32, quality: i32, data: Vec<u8>)
+pub fn clear()
 ```
 
-### Backend Disk Cache (backend/app/api/preview.py)
+### Backend Disk Cache (backend/src/routes/preview.rs)
 
 #### File System Cache
 
@@ -173,9 +173,8 @@ Request → Memory Cache → Disk Cache → PNG Generation
 
 The backend prevents duplicate PNG generation:
 
-```python
-_inflight_tasks: dict[tuple[str, int, int, int], asyncio.Future] = {}
-_inflight_lock: Lock
+```rust
+static INFLIGHT: LazyLock<Mutex<HashMap<String, oneshot::Receiver<Vec<u8>>>>>;
 ```
 
 If multiple requests for the same PNG arrive simultaneously, they wait for the first request to complete.
@@ -184,28 +183,26 @@ If multiple requests for the same PNG arrive simultaneously, they wait for the f
 
 ## MDOC Cache System
 
-### Backend State Management (backend/app/state/project_state.py)
+### Backend State Management (backend/src/state/project_state.rs)
 
 #### Project State Class
 
-```python
-class ProjectState:
-    config: Optional[ScanConfig]              # Scan configuration
-    tilt_series: Dict[str, TiltSeries]        # id → TiltSeries
-    frame_overrides: Dict[str, Dict[int, bool]]  # mdocPath → zIndex → selected
+```rust
+pub struct ProjectState {
+    pub config: RwLock<Option<ScanConfig>>,
+    pub tilt_series: RwLock<HashMap<String, TiltSeries>>,
+}
 ```
 
 **Key Operations:**
 
-```python
-def set_config(config: ScanConfig)          # Reset state on new scan
-def add_tilt_series(ts: TiltSeries)         # Store parsed tilt series
-def get_tilt_series(ts_id: str) → Optional[TiltSeries]
-def remove_tilt_series_by_mdoc_path(mdoc_path: str)
-def set_frame_override(mdoc_path: str, overrides: Dict[int, bool])
-def get_frame_override(mdoc_path: str, z_index: int, original: bool) → bool
-def clear_overrides(mdoc_path: str)
-def has_unsaved_changes(mdoc_path: str) → bool
+```rust
+pub async fn set_config(config: ScanConfig)          // Reset state on new scan
+pub async fn add_tilt_series(ts: TiltSeries)         // Store parsed tilt series
+pub async fn get_tilt_series(ts_id: &str) -> Option<TiltSeries>
+pub async fn list_tilt_series() -> Vec<TiltSeries>
+pub async fn remove_tilt_series_by_mdoc_path(mdoc_path: &str)
+pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> bool
 ```
 
 **Global Instance:** `project_state` (singleton)
@@ -248,7 +245,7 @@ function debouncePersist(): void  // Throttled localStorage writes
 
 ### MDOC File Operations
 
-#### Parser (backend/app/mdoc/parser.py)
+#### Parser (backend/src/mdoc/parser.rs)
 
 **Format:** SerialEM mdoc
 
@@ -263,28 +260,27 @@ function debouncePersist(): void  // Throttled localStorage writes
 
 **Returns:** `TiltSeries` with parsed frames
 
-#### Writer (backend/app/mdoc/writer.py)
+#### Writer (backend/src/mdoc/writer.rs)
 
 **Operations:**
 1. Create backup: `{mdocPath}.bak`
-2. Remove unselected frames from file
-3. Reassign ZValues sequentially for kept frames
-4. Preserve header section
+2. Parse the mdoc file via `emdoc`
+3. Remove unselected frame blocks (by ZValue)
+4. Write to `.mdoc.tmp` → atomic rename to `.mdoc`
 5. Return backup path
 
 **Signature:**
 
-```python
-def write_mdoc_with_selections(
-    mdoc_path: str,
-    selections: Dict[int, bool],
-    backup_path: str | None = None
-) → str
+```rust
+pub fn write_mdoc_with_selections(
+    mdoc_path: &str,
+    selections: &HashMap<i32, bool>,
+) -> Result<String, String>
 ```
 
-### API Endpoints (backend/app/api/mdoc.py)
+### API Endpoints (backend/src/routes/mdoc.rs)
 
-```python
+```
 POST /api/mdoc/scan           # Scan directory, parse all mdoc files
 GET  /api/mdoc/list           # List all tilt series
 GET  /api/mdoc/{ts_id}        # Get specific tilt series
@@ -298,154 +294,59 @@ POST /api/mdoc/backup-delete  # Backup and delete mdoc file
 
 ### Frontend State Architecture
 
-#### Svelte 5 Runes
+### Frontend State Architecture
 
-**$state:** Reactive local state (17 instances in Gallery.svelte)
+#### React useState (Gallery.tsx)
+
+**UI State (via `useState`):**
 
 ```typescript
-// UI State
-let expandedTs = $state(new Set<string>())          // Expanded tilt series
-let visibleFrames = $state(new Set<string>())       // Lazy-loaded frames
-let loadedPngFrames = $state(new Set<string>())     // Frames with real PNGs
-let thumbSize = $state(128)                         // Thumbnail width
+const [expandedTs, setExpandedTs] = useState<Set<string>>(new Set());
+const [selectedTsIds, setSelectedTsIds] = useState<Set<string>>(new Set());
+const [thumbSize, setThumbSize] = useState(128);
 
 // Operation State
-let isSavingAll = $state(false)                     // Save operation
-let isCachingAll = $state(false)                    // Cache all operation
-let isRefreshingCache = $state(false)               // Refresh cache operation
-let isDeletingCache = $state(false)                 // Delete cache operation
-let isScanning = $state(false)                      // Scan operation
-
-// Error/Message State
-let saveAllError = $state<string | null>(null)
-let scanError = $state<string | null>(null)
-let saveLoadMessage = $state<{type, text} | null>(null)
-
-// Selection State
-let selectedTsIds = $state(new Set<string>())       // Selected tilt series
-let selectionsStore = $state<SelectionState>(new Map())
-let unsavedTsList = $state<TiltSeries[]>([])
-
-// Cache State
-let cacheWarningState = $state({
-  memoryExceeded: false,
-  indexedDbExceeded: false,
-  evictionNeeded: false
-})
-
-// Dialog State
-let showScanDialog = $state(false)
-let showFileBrowser = $state(false)
-let fileBrowserTarget = $state<'mdoc' | 'image' | 'png' | 'config'>('mdoc')
-
-// Configuration State
-let scanConfig = $state({
-  mdoc_dir: '',
-  image_dir: '',
-  png_dir: '',
-  mdoc_prefix_cut: 0,
-  mdoc_suffix_cut: 0,
-  image_prefix_cut: 0,
-  image_suffix_cut: 0
-})
+const [isSaving, setIsSaving] = useState(false);
+const [isCaching, setIsCaching] = useState(false);
+const [cacheProgress, setCacheProgress] = useState({ cached: 0, total: 0, currentTs: '' });
+const [showScanDialog, setShowScanDialog] = useState(false);
 ```
 
-**$derived:** Computed values
+#### React Context (src/lib/store.tsx)
+
+Global state shared across components via `createContext` + `useContext`:
 
 ```typescript
-let configDir = $derived(`${$userHome}/.ts_sv`)
-```
-
-**$effect:** Side effects (3 instances)
-
-```typescript
-$effect(() => {
-  // Initialize scanConfig with userHome when available
-})
-
-$effect(() => {
-  // Subscribe to stores and manage cleanup
-})
-
-$effect(() => {
-  // Expand all TS when loaded (if no persisted state)
-})
-```
-
-#### Svelte Stores (src/lib/store.ts)
-
-**Writable Stores:**
-
-```typescript
-export const userHome = writable<string>('')                    // User home directory
-export const tiltSeries = writable<TiltSeries[]>([])            // All tilt series
-export const selections = writable<SelectionState>(new Map())   // Frame selections
-export const currentCacheSize = writable(0)                     // Memory cache size
-export const indexedDbCacheSize = writable(0)                   // IndexedDB cache size
-```
-
-**Derived Stores:**
-
-```typescript
-export const selectionsStore = derived(selections, ($selections) => $selections)
-
-export const cacheWarning = derived(
-  [currentCacheSize, indexedDbCacheSize],
-  ([$currentCacheSize, $indexedDbCacheSize]) => ({
-    memoryExceeded: $currentCacheSize > MAX_MEMORY_CACHE * 0.9,
-    indexedDbExceeded: $indexedDbCacheSize > MAX_INDEXEDDB_CACHE * 0.9,
-    evictionNeeded: $currentCacheSize > MAX_MEMORY_CACHE
-  })
-)
-
-export const unsavedTs = derived([tiltSeries, selections], ([$tiltSeries, $selections]) => {
-  return $tiltSeries.filter((ts) => {
-    const tsSelections = $selections.get(ts.mdocPath)
-    return tsSelections && tsSelections.size > 0
-  })
-})
-
-export const stats = derived([tiltSeries, selections], ([$tiltSeries, $selections]) => {
-  let totalFrames = 0
-  let selectedFrames = 0
-  for (const ts of $tiltSeries) {
-    for (const frame of ts.frames) {
-      totalFrames++
-      if (getFrameSelection(ts.mdocPath, frame.zIndex, frame.selected)) {
-        selectedFrames++
-      }
-    }
-  }
-  return {
-    totalSeries: $tiltSeries.length,
-    totalFrames,
-    selectedFrames,
-    unsavedCount: $selections.size
-  }
-})
-```
-
-#### Toast Store (src/lib/stores/toastStore.ts)
-
-**Type Definition:**
-
-```typescript
-export interface Toast {
-  id: string
-  type: 'success' | 'error' | 'warning' | 'info'
-  title?: string
-  description: string
-  duration: number  // 0 for persistent
+interface AppState {
+  tiltSeries: TiltSeries[];                          // All tilt series
+  setTiltSeries: (series: TiltSeries[]) => void;     // Update on scan/save
+  selections: SelectionState;                         // Map<mdocPath, Map<zIndex, boolean>>
+  setFrameSelection: (mdocPath, zIndex, selected) => void;
+  setBatchSelection: (mdocPath, selectionsMap) => void;
+  clearTsSelections: (mdocPath) => void;
+  clearAllSelections: () => void;
+  getFrameSelection: (mdocPath, zIndex, original) => boolean;
 }
 ```
 
-**Convenience Methods:**
+**Persistence:** Both `tiltSeries` and `selections` are persisted to `localStorage` on change. On app mount, they are restored from `localStorage` via lazy `useState` initializers.
+
+**Key behavior:**
+- `selections` act as **overrides** — if a frame has no selection override, the original `frame.selected` value from the scan is used
+- Selections are debounced (1s) before writing to `localStorage` to reduce I/O
+- On successful save, selections are cleared entirely
+
+#### Toast Notifications (sonner)
+
+Notifications use the `sonner` library's `toast()` function directly, not a dedicated store:
 
 ```typescript
-toastStore.success(description: string, title?: string, duration = 3000)
-toastStore.error(description: string, title?: string, duration = 5000)
-toastStore.warning(description: string, title?: string, duration = 4000)
-toastStore.info(description: string, title?: string, duration = 3000)
+import { toast } from 'sonner';
+
+toast.success('Scanned 12 tilt series');
+toast.error('Save failed', { description: '...' });
+toast.warning('No tilt series selected');
+toast.info('No changes to save');
 ```
 
 ### Frontend Persistence
@@ -454,9 +355,8 @@ toastStore.info(description: string, title?: string, duration = 3000)
 
 ```typescript
 'ts_tiltSeries'           // Tilt series data
-'ts_selections'           // Frame selections
-'gallery_expandedTs'      // Expanded tilt series
-'gallery_thumbSize'       // Thumbnail size
+'ts_selections'           // Frame selections (debounced 1s)
+'gallery_thumbSize'       // Thumbnail width in pixels
 ```
 
 ### Backend State Flow
@@ -657,67 +557,68 @@ async function batchSave(mdocPath: string, selectionsMap: Map<number, boolean>):
 function loadPersistedTiltSeries(): void
 ```
 
-### Backend Cache API (backend/app/cache/lru.py)
+### Backend Cache API (backend/src/cache/lru.rs)
 
-```python
-# Get from LRU cache
-def get(ts_id: str, frame_id: int, bin: int, quality: int) -> Optional[bytes]
+```rust
+// Get from LRU cache
+pub fn get(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Option<Vec<u8>>
 
-# Put in LRU cache
-def put(ts_id: str, frame_id: int, bin: int, quality: int, data: bytes)
+// Put in LRU cache
+pub fn put(ts_id: &str, frame_id: i32, bin: i32, quality: i32, data: Vec<u8>)
 
-# Clear LRU cache
-def clear()
+// Clear LRU cache
+pub fn clear()
 ```
 
-### Backend State API (backend/app/state/project_state.py)
+### Backend State API (backend/src/state/project_state.rs)
 
-```python
-# Set project configuration
-def set_config(config: ScanConfig)
+```rust
+// Set project configuration (also clears all tilt series)
+pub async fn set_config(config: ScanConfig)
 
-# Add tilt series
-def add_tilt_series(ts: TiltSeries)
+// Add tilt series
+pub async fn add_tilt_series(ts: TiltSeries)
 
-# Get tilt series
-def get_tilt_series(ts_id: str) -> Optional[TiltSeries]
+// Get tilt series by id
+pub async fn get_tilt_series(ts_id: &str) -> Option<TiltSeries>
 
-# Remove tilt series by mdoc path
-def remove_tilt_series_by_mdoc_path(mdoc_path: str)
+// List all tilt series
+pub async fn list_tilt_series() -> Vec<TiltSeries>
 
-# Set frame overrides
-def set_frame_override(mdoc_path: str, overrides: Dict[int, bool])
+// Remove tilt series by mdoc path
+pub async fn remove_tilt_series_by_mdoc_path(mdoc_path: &str)
 
-# Get frame override
-def get_frame_override(mdoc_path: str, z_index: int, original: bool) -> bool
-
-# Clear overrides
-def clear_overrides(mdoc_path: str)
-
-# Check for unsaved changes
-def has_unsaved_changes(mdoc_path: str) -> bool
-
-# List all tilt series
-def list_tilt_series() -> List[TiltSeries]
+// Update frames after save (removes deselected frames, recalculates angle range)
+pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> bool
 ```
 
-### Backend MDOC API (backend/app/api/mdoc.py)
+### Backend MDOC API (backend/src/routes/mdoc.rs)
 
-```python
+```
 # Scan project
 POST /api/mdoc/scan
 Request: ScanConfig
-Response: MdocScanResponse
+Response: { tiltSeries: TiltSeries[], total: number }
 
 # List tilt series
 GET /api/mdoc/list
-Response: List[TiltSeries]
+Response: TiltSeries[]
 
 # Get tilt series
 GET /api/mdoc/{ts_id}
 Response: TiltSeries
 
-# Batch save
+# Save all selections
+POST /api/mdoc/save-all
+Request: { selections: Record<mdocPath, Record<zIndex, bool>> }
+Response: { success, saved, failed, deleted, message }
+
+# Delete all
+POST /api/mdoc/delete-all
+Request: { mdoc_paths: string[] }
+Response: { success, deleted, failed, message }
+
+# Batch save single mdoc
 POST /api/mdoc/batch-save
 Request: BatchSaveRequest
 Response: BatchSaveResponse
@@ -728,17 +629,17 @@ Request: BackupDeleteRequest
 Response: BackupDeleteResponse
 ```
 
-### Backend PNG API (backend/app/api/preview.py)
+### Backend PNG API (backend/src/routes/preview.rs)
 
-```python
+```
 # Get PNG preview
 GET /api/preview/{ts_id}/{frame_id}
 Query: bin (1,2,4,8), quality (1-100)
-Response: PNG image
+Response: image/png
 
 # Get capabilities
 GET /api/preview/capabilities
-Response: {supported_bins, default_bin, quality_range, default_quality, format}
+Response: { supported_bins, default_bin, quality_range, default_quality, format }
 ```
 
 ---
@@ -916,12 +817,13 @@ interface PngCacheItem {
 
 ## References
 
-- **Frontend Store:** `src/lib/store.ts`
+- **Frontend Store:** `src/lib/store.tsx`
 - **Frontend Types:** `src/lib/types.ts`
-- **Frontend Components:** `src/lib/components/Gallery.svelte`
-- **Backend Cache:** `backend/app/cache/lru.py`
-- **Backend State:** `backend/app/state/project_state.py`
-- **Backend MDOC API:** `backend/app/api/mdoc.py`
-- **Backend PNG API:** `backend/app/api/preview.py`
-- **MDOC Parser:** `backend/app/mdoc/parser.py`
-- **MDOC Writer:** `backend/app/mdoc/writer.py`
+- **Frontend Cache:** `src/lib/cache.ts`
+- **Frontend Components:** `src/components/gallery/`
+- **Backend Cache:** `backend/src/cache/lru.rs`
+- **Backend State:** `backend/src/state/project_state.rs`
+- **Backend MDOC API:** `backend/src/routes/mdoc.rs`
+- **Backend PNG API:** `backend/src/routes/preview.rs`
+- **MDOC Parser:** `backend/src/mdoc/parser.rs`
+- **MDOC Writer:** `backend/src/mdoc/writer.rs`
