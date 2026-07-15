@@ -32,13 +32,12 @@ static INFLIGHT: LazyLock<Mutex<HashMap<String, InFlightTask>>> =
 #[derive(Deserialize)]
 pub struct PreviewParams {
     bin: Option<i32>,
-    quality: Option<i32>,
 }
 
 pub fn router() -> axum::Router {
     axum::Router::new()
         .route("/{ts_id}/{frame_id}", axum::routing::get(get_preview))
-        .route("/{ts_id}/mtimes", axum::routing::get(get_mtimes))
+        .route("/{ts_id}/frame-mtimes", axum::routing::get(get_mtimes))
         .route("/capabilities", axum::routing::get(get_capabilities))
 }
 
@@ -48,12 +47,11 @@ fn png_disk_path(
     ts_id: &str,
     frame_id: i32,
     bin: i32,
-    quality: i32,
 ) -> std::path::PathBuf {
     Path::new(png_dir)
         .join(ts_id)
         .join(format!("bin{bin}"))
-        .join(format!("frame_{frame_id:04}_q{quality}.png"))
+        .join(format!("frame_{frame_id:04}.png"))
 }
 
 /// Read the mtime of a file on disk, if it exists.
@@ -68,7 +66,6 @@ async fn get_preview(
     Query(params): Query<PreviewParams>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let bin = params.bin.unwrap_or(8);
-    let quality = params.quality.unwrap_or(90);
 
     // Validate params
     if ![1, 2, 4, 8].contains(&bin) {
@@ -77,21 +74,8 @@ async fn get_preview(
             "bin must be 1, 2, 4, or 8".to_string(),
         ));
     }
-    if !(1..=100).contains(&quality) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "quality must be between 1 and 100".to_string(),
-        ));
-    }
 
-    let task_key = format!("{ts_id}_{frame_id}_bin{bin}_q{quality}");
-
-    // Helper: read the mtime of a file on disk
-    let file_mtime_local = |p: &std::path::Path| -> Option<u64> {
-        std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-    };
+    let task_key = format!("{ts_id}_{frame_id}_bin{bin}");
 
     // Check memory cache
     {
@@ -101,7 +85,7 @@ async fn get_preview(
                 format!("cache lock error: {e}"),
             )
         })?;
-        if let Some(entry) = cache.get(&ts_id, frame_id, bin, quality) {
+        if let Some(entry) = cache.get(&ts_id, frame_id, bin, 90) {
             return Ok(build_png_response(entry.data.clone(), entry.mtime));
         }
     }
@@ -113,18 +97,17 @@ async fn get_preview(
             &ts_id,
             frame_id,
             bin,
-            quality,
         );
 
         if png_path.exists() && let Ok(data) = std::fs::read(&png_path) {
-            let mtime = file_mtime_local(&png_path);
+            let mtime = file_mtime(&png_path);
             let mut cache = PNG_CACHE.lock().map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("cache lock error: {e}"),
                 )
             })?;
-            cache.put(&ts_id, frame_id, bin, quality, data.clone(), mtime);
+            cache.put(&ts_id, frame_id, bin, 90, data.clone(), mtime);
             return Ok(build_png_response(data, mtime));
         }
     }
@@ -180,7 +163,7 @@ async fn get_preview(
 
         // Generate PNG (blocking I/O: read MRC + process image)
         tokio::task::spawn_blocking(move || {
-            generate_png(&mrc_path, ts_id_clone, frame_id, bin, quality, png_dir.as_deref())
+            generate_png(&mrc_path, ts_id_clone, frame_id, bin, png_dir.as_deref())
         })
             .await
             .map_err(|e| {
@@ -225,18 +208,11 @@ async fn get_mtimes(
     Query(params): Query<PreviewParams>,
 ) -> Result<Json<MtimesResponse>, (StatusCode, String)> {
     let bin = params.bin.unwrap_or(8);
-    let quality = params.quality.unwrap_or(90);
 
     if ![1, 2, 4, 8].contains(&bin) {
         return Err((
             StatusCode::BAD_REQUEST,
             "bin must be 1, 2, 4, or 8".to_string(),
-        ));
-    }
-    if !(1..=100).contains(&quality) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "quality must be between 1 and 100".to_string(),
         ));
     }
 
@@ -256,7 +232,6 @@ async fn get_mtimes(
             &ts_id,
             frame.z_index,
             bin,
-            quality,
         );
         if let Some(mtime) = file_mtime(&png_path) {
             mtimes.insert(frame.z_index, mtime);
@@ -296,7 +271,6 @@ fn generate_png(
     ts_id: String,
     frame_id: i32,
     bin: i32,
-    quality: i32,
     png_dir: Option<&str>,
 ) -> Result<(Vec<u8>, Option<u64>), String> {
     // Read image as f32
@@ -320,7 +294,7 @@ fn generate_png(
 
     // Save to disk and stat for mtime
     let disk_mtime = png_dir.and_then(|dir| {
-        let png_path = png_disk_path(dir, &ts_id, frame_id, bin, quality);
+        let png_path = png_disk_path(dir, &ts_id, frame_id, bin);
         if save_png(&contrasted, &png_path.to_string_lossy()).is_ok() {
             file_mtime(&png_path)
         } else {
@@ -329,13 +303,13 @@ fn generate_png(
     });
 
     // Encode to PNG bytes
-    let data = encode_png(&contrasted, quality as u8)?;
+    let data = encode_png(&contrasted)?;
 
     // Cache in memory
     let mut cache = PNG_CACHE
         .lock()
         .map_err(|e| format!("Cache lock error: {e}"))?;
-    cache.put(&ts_id, frame_id, bin, quality, data.clone(), disk_mtime);
+    cache.put(&ts_id, frame_id, bin, 90, data.clone(), disk_mtime);
 
     Ok((data, disk_mtime))
 }
@@ -344,8 +318,6 @@ async fn get_capabilities() -> Json<Value> {
     Json(json!({
         "supported_bins": [1, 2, 4, 8],
         "default_bin": 8,
-        "quality_range": [1, 100],
-        "default_quality": 90,
         "format": "PNG"
     }))
 }

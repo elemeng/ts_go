@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useAppState } from "@/lib/store";
-import { saveAll, scanProject } from "@/lib/api";
+import { saveAll, scanProject, listTiltSeries } from "@/lib/api";
 import { cacheAllMdocs, clearCache, validateTsCache } from "@/lib/cache";
 import { TiltSeriesCard } from "./tilt-series-card";
 import { ScanDialog } from "./scan-dialog";
@@ -49,7 +49,7 @@ export function Gallery() {
   // Validate cached PNGs after restoring persisted tilt series.
   useEffect(() => {
     for (const ts of tiltSeries) {
-      validateTsCache(ts, 8, 90).catch(() => {});
+      validateTsCache(ts, 8).catch(() => {});
     }
   }, [tiltSeries]);
 
@@ -127,28 +127,28 @@ export function Gallery() {
         case "center": {
           const start = Math.floor(totalFrames * 0.2);
           const end = Math.ceil(totalFrames * 0.8);
-          for (const frame of ts.frames) {
+          ts.frames.forEach((frame, idx) => {
             selectionsMap.set(
               frame.zIndex,
-              frame.zIndex >= start && frame.zIndex <= end,
+              idx >= start && idx <= end,
             );
-          }
+          });
           break;
         }
         case "edges": {
           const edgeSize = Math.floor(totalFrames * 0.2);
-          for (const frame of ts.frames) {
+          ts.frames.forEach((frame, idx) => {
             selectionsMap.set(
               frame.zIndex,
-              frame.zIndex < edgeSize || frame.zIndex >= totalFrames - edgeSize,
+              idx < edgeSize || idx >= totalFrames - edgeSize,
             );
-          }
+          });
           break;
         }
         case "alternate": {
-          for (const frame of ts.frames) {
-            selectionsMap.set(frame.zIndex, frame.zIndex % 2 === 0);
-          }
+          ts.frames.forEach((frame, idx) => {
+            selectionsMap.set(frame.zIndex, idx % 2 === 0);
+          });
           break;
         }
         case "all": {
@@ -179,7 +179,7 @@ export function Gallery() {
         setShowScanDialog(false);
         // Evict cached PNGs whose backend disk mtime has changed.
         for (const ts of series) {
-          validateTsCache(ts, 8, 90).catch(() => {});
+          validateTsCache(ts, 8).catch(() => {});
         }
         toast.success(`Scanned ${series.length} tilt series`);
       } catch (e) {
@@ -213,10 +213,17 @@ export function Gallery() {
 
       const result = await saveAll(selections, deletePaths);
 
-      // Update tilt series - remove deleted
-      if (deletePaths.length > 0) {
-        const deletedSet = new Set(deletePaths);
-        setTiltSeries(tiltSeries.filter((ts) => !deletedSet.has(ts.mdocPath)));
+      // Refresh tilt series from backend to reflect saved changes
+      // (deselected frames removed, angle ranges recalculated)
+      try {
+        const updatedSeries = await listTiltSeries();
+        setTiltSeries(updatedSeries);
+      } catch {
+        // If refresh fails, fall back to local deletion only
+        if (deletePaths.length > 0) {
+          const deletedSet = new Set(deletePaths);
+          setTiltSeries(tiltSeries.filter((ts) => !deletedSet.has(ts.mdocPath)));
+        }
       }
 
       // Clear all selections

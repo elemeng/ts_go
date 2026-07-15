@@ -54,7 +54,7 @@ export function FrameThumbnail({
   useEffect(() => {
     if (!isVisible || isLoaded) return;
     // Skip frames with no matching mrc file on disk
-    if (!isSelected && !frame.mrcPath.startsWith("/")) return;
+    if (!frame.mrcPath.startsWith("/")) return;
 
     let cancelled = false;
     let currentUrl: string | null = null;
@@ -68,7 +68,7 @@ export function FrameThumbnail({
 
     (async () => {
       try {
-        const cached = await getPng(tsId, frame.zIndex, frame.mrcPath, 8, 90);
+        const cached = await getPng(tsId, frame.zIndex, frame.mrcPath, 8);
         if (cached) {
           if (cancelled) return;
           const url = URL.createObjectURL(cached.blob);
@@ -76,7 +76,7 @@ export function FrameThumbnail({
           setImgUrl(url);
           setIsLoaded(true);
         } else {
-          const result = await fetchPng(tsId, frame.zIndex, 8, 90);
+          const result = await fetchPng(tsId, frame.zIndex, 8);
           if (cancelled) return;
           const url = URL.createObjectURL(result.blob);
           currentUrl = url;
@@ -89,7 +89,6 @@ export function FrameThumbnail({
             frame.mrcPath,
             result.pngMtime,
             8,
-            90,
           );
         }
       } catch (e) {

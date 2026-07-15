@@ -33,8 +33,8 @@ async function initDB(): Promise<IDBDatabase> {
   });
 }
 
-function cacheKey(tsId: string, zIndex: number, bin = 8, quality = 90): string {
-  return `${tsId}_${zIndex}_bin${bin}_q${quality}`;
+function cacheKey(tsId: string, zIndex: number, bin = 8): string {
+  return `${tsId}_${zIndex}_bin${bin}`;
 }
 
 // ── Read path ─────────────────────────────────────────────────
@@ -50,9 +50,8 @@ export async function getPng(
   zIndex: number,
   mrcPath: string,
   bin = 8,
-  quality = 90,
 ): Promise<{ blob: Blob; pngMtime: number } | null> {
-  const key = cacheKey(tsId, zIndex, bin, quality);
+  const key = cacheKey(tsId, zIndex, bin);
 
   // 1. Memory cache (hot, per-session)
   const memCached = memoryCache.get(key);
@@ -141,9 +140,8 @@ export async function putPng(
   mrcPath: string,
   pngMtime: number,
   bin = 8,
-  quality = 90,
 ): Promise<void> {
-  const key = cacheKey(tsId, zIndex, bin, quality);
+  const key = cacheKey(tsId, zIndex, bin);
   const size = data.size;
 
   // Memory
@@ -173,9 +171,8 @@ async function deletePng(
   tsId: string,
   zIndex: number,
   bin = 8,
-  quality = 90,
 ): Promise<void> {
-  const key = cacheKey(tsId, zIndex, bin, quality);
+  const key = cacheKey(tsId, zIndex, bin);
   memoryCache.delete(key);
 
   try {
@@ -193,10 +190,9 @@ async function deletePng(
 export async function validateTsCache(
   ts: TiltSeries,
   bin = 8,
-  quality = 90,
 ): Promise<void> {
   try {
-    const mtimes = await fetchMtimes(ts.id, bin, quality);
+    const mtimes = await fetchMtimes(ts.id, bin);
     for (const frame of ts.frames) {
       const backendMtime = mtimes.get(frame.zIndex);
       if (backendMtime === undefined) continue; // no disk PNG yet, keep cache
@@ -206,10 +202,9 @@ export async function validateTsCache(
         frame.zIndex,
         frame.mrcPath,
         bin,
-        quality,
       );
       if (cached && cached.pngMtime !== backendMtime) {
-        await deletePng(ts.id, frame.zIndex, bin, quality);
+        await deletePng(ts.id, frame.zIndex, bin);
       }
     }
   } catch (e) {
@@ -254,9 +249,9 @@ export async function cacheMdoc(
       const idx = nextIndex++;
       const frame = cacheable[idx];
       try {
-        const cached = await getPng(ts.id, frame.zIndex, frame.mrcPath, 8, 90);
+        const cached = await getPng(ts.id, frame.zIndex, frame.mrcPath, 8);
         if (!cached) {
-          const result = await fetchPng(ts.id, frame.zIndex, 8, 90);
+          const result = await fetchPng(ts.id, frame.zIndex, 8);
           await putPng(
             ts.id,
             frame.zIndex,
@@ -264,7 +259,6 @@ export async function cacheMdoc(
             frame.mrcPath,
             result.pngMtime,
             8,
-            90,
           );
         }
         results[idx] = "success";
@@ -311,7 +305,7 @@ export async function cacheAllMdocs(
 
   for (const ts of tiltSeries) {
     // Evict stale entries before re-caching so we don't keep out-of-date PNGs.
-    await validateTsCache(ts, 8, 90);
+    await validateTsCache(ts, 8);
     const result = await cacheMdoc(ts, (current, total) => {
       onProgress?.({
         currentTs: ts.id,

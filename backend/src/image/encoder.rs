@@ -12,7 +12,7 @@ fn array_to_gray_image(img: &Array2<u8>) -> Result<GrayImage, String> {
 }
 
 /// Encode a u8 grayscale array as PNG bytes.
-pub fn encode_png(img: &Array2<u8>, _quality: u8) -> Result<Vec<u8>, String> {
+pub fn encode_png(img: &Array2<u8>) -> Result<Vec<u8>, String> {
     let gray_img = array_to_gray_image(img)?;
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);

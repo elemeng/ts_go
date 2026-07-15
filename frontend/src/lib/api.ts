@@ -111,12 +111,11 @@ export async function fetchPng(
   tsId: string,
   zIndex: number,
   bin = 8,
-  quality = 90,
 ): Promise<{ blob: Blob; pngMtime: number }> {
   const response = await fetch(
     `${API_BASE}/api/preview/${
       encodeURIComponent(tsId)
-    }/${zIndex}?bin=${bin}&quality=${quality}`,
+    }/${zIndex}?bin=${bin}`,
   );
   if (!response.ok) throw new Error("Failed to fetch PNG");
   const blob = await response.blob();
@@ -129,12 +128,11 @@ export async function fetchPng(
 export async function fetchMtimes(
   tsId: string,
   bin = 8,
-  quality = 90,
 ): Promise<Map<number, number>> {
   const response = await fetch(
     `${API_BASE}/api/preview/${
       encodeURIComponent(tsId)
-    }/mtimes?bin=${bin}&quality=${quality}`,
+    }/frame-mtimes?bin=${bin}`,
   );
   if (!response.ok) throw new Error("Failed to fetch PNG mtimes");
   const data = await response.json() as { mtimes: Record<string, number> };
