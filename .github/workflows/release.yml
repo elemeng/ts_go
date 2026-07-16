@@ -48,7 +48,7 @@ jobs:
 
       - name: Package release tarball
         run: |
-          RELEASE_DIR="/tmp/ts-go-release"
+          RELEASE_DIR="/tmp/TomoCurator-release"
           rm -rf "$RELEASE_DIR"
           mkdir -p "$RELEASE_DIR/backend"
           mkdir -p "$RELEASE_DIR/frontend"
@@ -66,14 +66,14 @@ jobs:
           # Determine release name
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
-            RELEASE_NAME="ts-go-${TAG_NAME}"
+            RELEASE_NAME="TomoCurator-${TAG_NAME}"
           else
-            RELEASE_NAME="ts-go-$(date +%Y%m%d_%H%M%S)"
+            RELEASE_NAME="TomoCurator-$(date +%Y%m%d_%H%M%S)"
           fi
 
           # Create tarball
           cd /tmp
-          tar czf "${GITHUB_WORKSPACE}/${RELEASE_NAME}.tar.gz" "ts-go-release"
+          tar czf "${GITHUB_WORKSPACE}/${RELEASE_NAME}.tar.gz" "TomoCurator-release"
           cd "${GITHUB_WORKSPACE}"
 
           echo "RELEASE_NAME=${RELEASE_NAME}" >> "$GITHUB_ENV"
@@ -108,7 +108,7 @@ jobs:
             ### 🔧 Usage
             ```bash
             tar xzf ${{ env.TARBALL }}
-            cd ts-go-release
+            cd TomoCurator-release
             ./run.sh
             ```
 

@@ -17,7 +17,7 @@ error() { echo -e "${RED}[TEST]${NC} $*"; }
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 START_PORT="${1:-8088}"
-TEST_DIR="/tmp/ts-go-test-$$"
+TEST_DIR="/tmp/TomoCurator-test-$$"
 
 # Find a free port — but if the first port is taken by our own binary, kill it
 info "Checking port $START_PORT..."
@@ -50,7 +50,7 @@ cd "$PROJECT_ROOT"
 ./build-release.sh 2>&1 | sed 's/^/  /'
 
 # Find the tarball
-TARBALL=$(ls -t ts-go-*.tar.gz 2>/dev/null | head -1)
+TARBALL=$(ls -t TomoCurator-*.tar.gz 2>/dev/null | head -1)
 if [ -z "$TARBALL" ]; then
     error "No tarball found after build"
     exit 1

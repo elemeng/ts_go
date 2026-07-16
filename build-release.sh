@@ -18,8 +18,8 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 API_BASE="${1:-}"  # empty = same origin (recommended for production)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RELEASE_DIR="/tmp/ts-go-release"
-RELEASE_NAME="ts-go-$(date +%Y%m%d_%H%M%S)"
+RELEASE_DIR="/tmp/TomoCurator-release"
+RELEASE_NAME="TomoCurator-$(date +%Y%m%d_%H%M%S)"
 
 # Add common tool locations to PATH
 export PATH="$HOME/.deno/bin:$HOME/.cargo/bin:$PATH"
@@ -121,7 +121,7 @@ chmod +x "$RELEASE_DIR/run.sh"
 # Step 4: Create tarball
 info "Creating tarball..."
 cd /tmp
-tar czf "$PROJECT_ROOT/$RELEASE_NAME.tar.gz" "ts-go-release"
+tar czf "$PROJECT_ROOT/$RELEASE_NAME.tar.gz" "TomoCurator-release"
 cd "$PROJECT_ROOT"
 
 echo ""
@@ -134,6 +134,6 @@ info "  Deploy on HPC:"
 info "    scp $RELEASE_NAME.tar.gz user@hpc:~/"
 info "    ssh user@hpc"
 info "    tar xzf $RELEASE_NAME.tar.gz"
-info "    cd ts-go-release"
+info "    cd TomoCurator-release"
 info "    ./run.sh"
 info "========================================"
