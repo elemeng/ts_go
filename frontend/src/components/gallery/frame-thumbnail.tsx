@@ -11,7 +11,9 @@ interface FrameThumbnailProps {
   frame: Frame;
   isSelected: boolean;
   thumbSize: number;
+  bin: number;
   isVisible: boolean;
+  deleted?: boolean;
   onVisible: () => void;
   onToggle: () => void;
 }
@@ -21,7 +23,9 @@ export function FrameThumbnail({
   frame,
   isSelected,
   thumbSize,
+  bin,
   isVisible,
+  deleted,
   onVisible,
   onToggle,
 }: FrameThumbnailProps) {
@@ -29,8 +33,9 @@ export function FrameThumbnail({
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // IntersectionObserver for lazy loading
+  // IntersectionObserver for lazy loading (skip for deleted frames)
   useEffect(() => {
+    if (deleted) return; // deleted frames are always visible
     const el = containerRef.current;
     if (!el || isVisible) return;
 
@@ -48,7 +53,7 @@ export function FrameThumbnail({
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [isVisible, onVisible]);
+  }, [isVisible, onVisible, deleted]);
 
   // Load PNG when visible (only if frame has a valid mrc path)
   useEffect(() => {
@@ -68,7 +73,7 @@ export function FrameThumbnail({
 
     (async () => {
       try {
-        const cached = await getPng(tsId, frame.zIndex, frame.mrcPath, 8);
+        const cached = await getPng(tsId, frame.zIndex, frame.mrcPath, bin);
         if (cached) {
           if (cancelled) return;
           const url = URL.createObjectURL(cached.blob);
@@ -76,7 +81,7 @@ export function FrameThumbnail({
           setImgUrl(url);
           setIsLoaded(true);
         } else {
-          const result = await fetchPng(tsId, frame.zIndex, 8);
+          const result = await fetchPng(tsId, frame.zIndex, bin);
           if (cancelled) return;
           const url = URL.createObjectURL(result.blob);
           currentUrl = url;
@@ -88,7 +93,7 @@ export function FrameThumbnail({
             result.blob,
             frame.mrcPath,
             result.pngMtime,
-            8,
+            bin,
           );
         }
       } catch (e) {
@@ -100,7 +105,7 @@ export function FrameThumbnail({
       cancelled = true;
       release();
     };
-  }, [isVisible, isSelected, tsId, frame.zIndex, frame.mrcPath, isLoaded]);
+  }, [isVisible, bin, tsId, frame.zIndex, frame.mrcPath, isLoaded]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -119,11 +124,13 @@ export function FrameThumbnail({
   return (
     <div
       ref={containerRef}
-      className="inline-flex cursor-pointer flex-col items-center"
+      className={`inline-flex cursor-pointer flex-col items-center ${
+        deleted ? "opacity-75" : ""
+      }`}
       onClick={handleClick}
     >
       <figure
-        className="p-1"
+        className={`p-1 ${deleted ? "rounded-md border-2 border-dashed border-pink-400" : ""}`}
         style={{ width: thumbSize, height: thumbSize }}
       >
         {isVisible
@@ -145,7 +152,7 @@ export function FrameThumbnail({
         <Checkbox
           checked={isSelected}
           onCheckedChange={onToggle}
-          className="h-3 w-3"
+          className={`h-3 w-3 ${deleted ? "accent-pink-500" : ""}`}
         />
       </div>
     </div>

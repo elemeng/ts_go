@@ -9,11 +9,14 @@ set -euo pipefail
 START="${1:-8088}"
 END="${2:-9000}"
 
+# Get all listening ports in one shot
+LISTENING_PORTS=$(ss -tlnp 2>/dev/null | grep -oP ':\K\d+' | sort -nu)
+
 TAKEN=()
 FREE=""
 
 for port in $(seq "$START" "$END"); do
-    if ss -tlnp 2>/dev/null | grep -Eq ":${port}[ :]"; then
+    if echo "$LISTENING_PORTS" | grep -qx "$port"; then
         TAKEN+=("$port")
     elif [ -z "$FREE" ]; then
         FREE="$port"

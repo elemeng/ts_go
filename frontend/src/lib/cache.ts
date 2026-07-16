@@ -240,6 +240,7 @@ export async function clearCache(): Promise<void> {
 /** Cache all matched frames of a single tilt series (concurrency = 6). */
 export async function cacheMdoc(
   ts: TiltSeries,
+  bin = 8,
   onProgress?: (current: number, total: number) => void,
 ): Promise<{ success: number; failed: number }> {
   const cacheable = ts.frames.filter((f) => f.selected);
@@ -247,24 +248,25 @@ export async function cacheMdoc(
   if (total === 0) return { success: 0, failed: 0 };
 
   const CONCURRENCY = 6;
-  const results: ("success" | "failed")[] = new Array(total);
+  const results: ("success" | "failed" | undefined)[] = new Array(total);
   let nextIndex = 0;
+  let completedCount = 0;
 
   async function worker() {
     while (nextIndex < total) {
       const idx = nextIndex++;
       const frame = cacheable[idx];
       try {
-        const cached = await getPng(ts.id, frame.zIndex, frame.mrcPath, 8);
+        const cached = await getPng(ts.id, frame.zIndex, frame.mrcPath, bin);
         if (!cached) {
-          const result = await fetchPng(ts.id, frame.zIndex, 8);
+          const result = await fetchPng(ts.id, frame.zIndex, bin);
           await putPng(
             ts.id,
             frame.zIndex,
             result.blob,
             frame.mrcPath,
             result.pngMtime,
-            8,
+            bin,
           );
         }
         results[idx] = "success";
@@ -272,12 +274,9 @@ export async function cacheMdoc(
         console.error(`[cache] FAILED ${ts.id}/${frame.zIndex}:`, e);
         results[idx] = "failed";
       }
+      completedCount++;
       if (onProgress) {
-        onProgress(
-          results.filter((r) => r === "success").length +
-            results.filter((r) => r === "failed").length,
-          total,
-        );
+        onProgress(completedCount, total);
       }
     }
   }
@@ -292,6 +291,7 @@ export async function cacheMdoc(
 /** Cache all tilt series sequentially. */
 export async function cacheAllMdocs(
   tiltSeries: TiltSeries[],
+  bin = 8,
   onProgress?: (progress: {
     currentTs: string;
     current: number;
@@ -311,8 +311,8 @@ export async function cacheAllMdocs(
 
   for (const ts of tiltSeries) {
     // Evict stale entries before re-caching so we don't keep out-of-date PNGs.
-    await validateTsCache(ts, 8);
-    const result = await cacheMdoc(ts, (current, total) => {
+    await validateTsCache(ts, bin);
+    const result = await cacheMdoc(ts, bin, (current, total) => {
       onProgress?.({
         currentTs: ts.id,
         current,

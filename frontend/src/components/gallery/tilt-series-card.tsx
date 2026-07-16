@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useAppState } from "@/lib/store";
 import type { Frame, TiltSeries } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -13,15 +13,17 @@ interface TiltSeriesCardProps {
   isExpanded: boolean;
   isSelected: boolean;
   thumbSize: number;
+  bin: number;
+  sortBy: "angle" | "time";
+  showDeleted: boolean;
+  deletedFrames: Frame[];
   onToggle: () => void;
   onToggleSelection: () => void;
   onSelectAll: (select: boolean) => void;
   onInvert: () => void;
   onReset: () => void;
-  onQuickFilter: (
-    preset: "center" | "edges" | "alternate" | "all" | "none",
-  ) => void;
   onFrameToggle: (frame: Frame) => void;
+  onDeletedFrameToggle?: (zIndex: number, selected: boolean) => void;
 }
 
 export function TiltSeriesCard({
@@ -29,16 +31,54 @@ export function TiltSeriesCard({
   isExpanded,
   isSelected,
   thumbSize,
+  bin,
+  sortBy,
+  showDeleted,
+  deletedFrames,
   onToggle,
   onToggleSelection,
   onSelectAll,
   onInvert,
   onReset,
-  onQuickFilter,
   onFrameToggle,
+  onDeletedFrameToggle,
 }: TiltSeriesCardProps) {
   const { getFrameSelection } = useAppState();
   const [visibleFrames, setVisibleFrames] = useState<Set<string>>(new Set());
+
+  // Parse mdoc DateTime format: "DD-Mon-YYYY HH:MM:SS" or "DD-Mon-YY HH:MM:SS" → epoch ms
+  function parseMdocDateTime(dt: string): number {
+    if (!dt) return 0;
+    const months: Record<string, number> = {
+      Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+      Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+    };
+    // Try 4-digit year: DD-Mon-YYYY HH:MM:SS
+    let match = dt.match(/^(\d{2})-(\w{3})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (match) {
+      const [, dd, mon, yyyy, hh, mm, ss] = match;
+      return new Date(parseInt(yyyy), months[mon], parseInt(dd), parseInt(hh), parseInt(mm), parseInt(ss)).getTime();
+    }
+    // Try 2-digit year: DD-Mon-YY HH:MM:SS
+    match = dt.match(/^(\d{2})-(\w{3})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+    if (match) {
+      const [, dd, mon, yy, hh, mm, ss] = match;
+      const year = 2000 + parseInt(yy);
+      return new Date(year, months[mon], parseInt(dd), parseInt(hh), parseInt(mm), parseInt(ss)).getTime();
+    }
+    return 0;
+  }
+
+  // Sort frames based on the current sort mode
+  const sortedFrames = useMemo(() => {
+    return [...ts.frames].sort((a, b) => {
+      if (sortBy === "angle") {
+        return a.angle - b.angle;
+      }
+      // sortBy === "time"
+      return parseMdocDateTime(a.dateTime) - parseMdocDateTime(b.dateTime);
+    });
+  }, [ts.frames, sortBy]);
 
   const selectedCount =
     ts.frames.filter((f) =>
@@ -53,6 +93,8 @@ export function TiltSeriesCard({
   const setFrameVisible = useCallback((tsId: string, zIndex: number) => {
     setVisibleFrames((prev) => new Set(prev).add(`${tsId}_${zIndex}`));
   }, []);
+
+  const hasDeleted = deletedFrames.length > 0;
 
   return (
     <div className="rounded-lg border bg-card">
@@ -72,6 +114,11 @@ export function TiltSeriesCard({
               <p className="text-sm text-muted-foreground">
                 {ts.frames.length} frames | {ts.angleRange[0]}° →{" "}
                 {ts.angleRange[1]}°
+                {hasDeleted && (
+                  <span className="ml-2 text-destructive">
+                    ({deletedFrames.length} deleted)
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -99,27 +146,6 @@ export function TiltSeriesCard({
               <Button variant="ghost" size="sm" onClick={onReset}>
                 ↺ Reset
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onQuickFilter("center")}
-              >
-                Center
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onQuickFilter("edges")}
-              >
-                Edges
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onQuickFilter("alternate")}
-              >
-                Alternate
-              </Button>
             </div>
           </div>
         )}
@@ -135,11 +161,12 @@ export function TiltSeriesCard({
                 `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`,
             }}
           >
-            {ts.frames.map((frame) => (
+            {sortedFrames.map((frame) => (
               <FrameThumbnail
-                key={frame.zIndex}
+                key={`${frame.zIndex}_bin${bin}`}
                 tsId={ts.id}
                 frame={frame}
+                bin={bin}
                 isSelected={getFrameSelection(
                   ts.mdocPath,
                   frame.zIndex,
@@ -152,6 +179,54 @@ export function TiltSeriesCard({
               />
             ))}
           </div>
+
+          {/* Deleted Frames Section */}
+          {showDeleted && hasDeleted && (
+            <div className="mt-4">
+              <div className="mb-2 flex items-center gap-2">
+                <div className="h-px flex-1 bg-pink-200" />
+                <span className="text-xs font-medium text-pink-500">
+                  Deleted Frames — check to restore on next save
+                </span>
+                <div className="h-px flex-1 bg-pink-200" />
+              </div>
+              <div
+                className="grid gap-2"
+                style={{
+                  gridTemplateColumns:
+                    `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`,
+                }}
+              >
+                {deletedFrames.map((frame) => (
+                  <FrameThumbnail
+                    key={`deleted_${frame.zIndex}_bin${bin}`}
+                    tsId={ts.id}
+                    frame={frame}
+                    bin={bin}
+                    isSelected={getFrameSelection(
+                      ts.mdocPath,
+                      frame.zIndex,
+                      frame.selected,
+                    )}
+                    thumbSize={thumbSize}
+                    deleted={true}
+                    isVisible={true}
+                    onVisible={() => {}}
+                    onToggle={() =>
+                      onDeletedFrameToggle?.(
+                        frame.zIndex,
+                        !getFrameSelection(
+                          ts.mdocPath,
+                          frame.zIndex,
+                          frame.selected,
+                        ),
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

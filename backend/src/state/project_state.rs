@@ -45,7 +45,7 @@ impl ProjectState {
         &self,
         mdoc_path: &str,
         selections: &std::collections::HashMap<i32, bool>,
-    ) -> bool {
+    ) -> Result<(), String> {
         let mut ts_map = self.tilt_series.write().await;
         let ts = ts_map.values().find(|ts| ts.mdoc_path == mdoc_path).cloned();
 
@@ -78,9 +78,9 @@ impl ProjectState {
                 ts.frames = Vec::new();
                 ts_map.insert(ts.id.clone(), ts);
             }
-            true
+            Ok(())
         } else {
-            false
+            Err(format!("tilt series not found for mdoc path: {mdoc_path}"))
         }
     }
 }

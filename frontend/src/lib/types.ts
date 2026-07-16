@@ -7,6 +7,8 @@ export interface Frame {
   angle: number;
   mrcPath: string;
   selected: boolean;
+  mrcMtime: number;
+  dateTime: string;
 }
 
 /** Represents a complete tilt series from an mdoc file. */

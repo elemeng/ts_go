@@ -47,8 +47,20 @@ async fn main() {
     }
 
     // Configure CORS (still needed for dev mode with separate ports)
+    let cors_origin: tower_http::cors::AllowOrigin = match std::env::var("CORS_ORIGIN") {
+        Ok(origin) if !origin.is_empty() => {
+            match origin.parse::<axum::http::HeaderValue>() {
+                Ok(hv) => hv.into(),
+                Err(e) => {
+                    tracing::warn!("Invalid CORS_ORIGIN value '{origin}': {e}, falling back to AllowOrigin::any()");
+                    Any.into()
+                }
+            }
+        }
+        _ => Any.into(),
+    };
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(cors_origin)
         .allow_methods(Any)
         .allow_headers(Any);
 

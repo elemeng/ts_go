@@ -95,6 +95,7 @@ async fn get_tilt_series(AxumPath(ts_id): AxumPath<String>) -> Result<Json<TiltS
 async fn save_all(Json(request): Json<SaveAllRequest>) -> Json<SaveAllResponse> {
     let mut saved = Vec::new();
     let mut failed = Vec::new();
+    let mut backups = Vec::new();
 
     if request.selections.is_empty() {
         return Json(SaveAllResponse {
@@ -103,14 +104,23 @@ async fn save_all(Json(request): Json<SaveAllRequest>) -> Json<SaveAllResponse> 
             saved: vec![],
             failed: vec![],
             deleted: vec![],
+            backups: vec![],
         });
     }
 
     for (mdoc_path, selections) in &request.selections {
         match write_mdoc_with_selections(mdoc_path, selections) {
-            Ok(_) => {
-                PROJECT_STATE.update_tilt_series_frames(mdoc_path, selections).await;
-                saved.push(mdoc_path.clone());
+            Ok(backup_path) => {
+                match PROJECT_STATE.update_tilt_series_frames(mdoc_path, selections).await {
+                    Ok(()) => {
+                        saved.push(mdoc_path.clone());
+                        backups.push(backup_path);
+                    }
+                    Err(e) => {
+                        tracing::warn!("{}: in-memory state update failed: {}", mdoc_path, e);
+                        failed.push(format!("{mdoc_path}: {e}"));
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to save {}: {}", mdoc_path, e);
@@ -132,6 +142,7 @@ async fn save_all(Json(request): Json<SaveAllRequest>) -> Json<SaveAllResponse> 
         failed,
         deleted: vec![],
         message,
+        backups,
     })
 }
 
@@ -194,7 +205,13 @@ async fn batch_save(Json(request): Json<BatchSaveRequest>) -> Result<Json<BatchS
         Ok(backup_path) => {
             PROJECT_STATE
                 .update_tilt_series_frames(&request.mdoc_path, &request.selections)
-                .await;
+                .await
+                .map_err(|e| {
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("state update failed: {e}"),
+                    )
+                })?;
 
             let updated_ts = PROJECT_STATE.get_tilt_series(&ts.id).await;
 

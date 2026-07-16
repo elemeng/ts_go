@@ -10,19 +10,26 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
-RELEASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# If running from scripts/ subdirectory, adjust to project root
+if [[ "$(basename "$SCRIPT_DIR")" == "scripts" ]]; then
+    RELEASE_DIR="$(dirname "$SCRIPT_DIR")"
+else
+    RELEASE_DIR="$SCRIPT_DIR"
+fi
 BINARY_PID=""
 ACTUAL_PORT=""
 
 cleanup() {
+    local exit_code=$?
     info "Shutting down..."
     [ -n "$BINARY_PID" ] && kill "$BINARY_PID" 2>/dev/null && wait "$BINARY_PID" 2>/dev/null && info "  Stopped"
-    exit 0
+    exit $exit_code
 }
 trap cleanup SIGINT SIGTERM EXIT
 
 if [ ! -x "$RELEASE_DIR/backend/ts-sv-backend" ]; then
-    error "Binary not found at backend/ts-sv-backend"
+    error "Binary not found at $RELEASE_DIR/backend/ts-sv-backend"
     exit 1
 fi
 
@@ -62,4 +69,4 @@ info "  Press Ctrl+C to stop"
 info "============================================"
 echo ""
 
-wait
+wait "$BINARY_PID"
