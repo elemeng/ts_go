@@ -3,7 +3,7 @@
 A web application for **Cryo-ET tilt series filtering, inspection, and visualization**.
 Point your browser at it, scan a project directory, and start curating.
 
-![CryoET Tilt Series Curator screenshot](ts_go.png)
+![CryoET Tilt Series Curator screenshot](TomoCurator.png)
 
 ---
 
@@ -11,7 +11,7 @@ Point your browser at it, scan a project directory, and start curating.
 
 ### 1. Download the latest release
 
-Download `ts-go-*.tar.gz` from the [releases page](https://github.com/elemeng/ts_go/releases).
+Download `TomoCurator-*.tar.gz` from the [releases page](https://github.com/elemeng/TomoCurator/releases).
 
 No Rust, Deno, or any other toolchain is required — the tarball is fully self-contained.
 The backend binary is **statically linked with musl** — it runs on **any Linux distribution** regardless of glibc version.
@@ -19,8 +19,8 @@ The backend binary is **statically linked with musl** — it runs on **any Linux
 ### 2. Unpack on the machine where your data lives
 
 ```bash
-tar xzf ts-go-*.tar.gz
-cd ts-go-release
+tar xzf TomoCurator-*.tar.gz
+cd TomoCurator-release
 ```
 
 The server should run on the same machine (or same network filesystem) where your MRC and mdoc files are stored. It does not need GPU or large memory — a typical HPC login node or lab workstation is fine.
@@ -51,11 +51,11 @@ That's it. You will see the **CryoET Tilt Series Curator** interface. Click **Sc
 >
 > Tom downloads the release tarball on `cryo-em-001`:
 > ```bash
-> scp ts-go-20260715.tar.gz tom@cryo-em-001:~/curation/
+> scp TomoCurator-20260715.tar.gz tom@cryo-em-001:~/curation/
 > ssh tom@cryo-em-001
 > cd ~/curation
-> tar xzf ts-go-20260715.tar.gz
-> cd ts-go-release
+> tar xzf TomoCurator-20260715.tar.gz
+> cd TomoCurator-release
 > ./run.sh
 > ```
 >
@@ -156,7 +156,7 @@ Press `Ctrl+C` in the terminal where `run.sh` is running.
 ./build-release.sh
 ```
 
-This produces `ts-go-{date}.tar.gz` — the same format as the downloadable releases.
+This produces `TomoCurator-{date}.tar.gz` — the same format as the downloadable releases.
 
 The backend is built with `x86_64-unknown-linux-musl` target, producing a **fully statically linked binary** that runs on any Linux distribution without any dependencies.
 
@@ -187,7 +187,7 @@ Open http://localhost:3000 (Next.js dev server with hot reload).
 ### Project structure
 
 ```
-ts_go/
+TomoCurator/
 ├── frontend/          # Next.js 16 + React UI
 ├── backend/           # Rust + Axum API server
 │   ├── src/
