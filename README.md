@@ -3,6 +3,9 @@
 A web application for **Cryo-ET tilt series filtering, inspection, and visualization**.
 Point your browser at it, scan a project directory, and start curating.
 
+#### NOTE: This repo was renamed from **ts_go** to **TomoCurator** for semantics correctness.
+
+
 ![CryoET Tilt Series Curator screenshot](TomoCurator.png)
 
 ---
