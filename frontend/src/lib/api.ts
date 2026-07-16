@@ -135,28 +135,41 @@ export async function fetchMtimes(
     }/frame-mtimes?bin=${bin}`,
   );
   if (!response.ok) throw new Error("Failed to fetch PNG mtimes");
-  const data = await response.json() as { mtimes: Record<string, number> };
+  const data = await response.json();
+  if (!data || typeof data.mtimes !== 'object' || data.mtimes === null) {
+    throw new Error("Invalid mtimes response format");
+  }
   const result = new Map<number, number>();
   for (const [zIndex, mtime] of Object.entries(data.mtimes)) {
-    result.set(Number(zIndex), mtime);
+    result.set(Number(zIndex), mtime as number);
   }
   return result;
 }
 
 // ==================== Save / Delete ====================
 
-/** Save all mdoc changes */
+/** Save all mdoc changes.
+ *  Builds the selections payload from the current effective frame state
+ *  (original frame.selected + any user overrides in selectionsState).
+ *  This ensures auto-unselected frames (e.g. missing MRC files) are saved. */
 export async function saveAll(
+  tiltSeries: TiltSeries[],
   selectionsState: SelectionState,
   deletePaths?: string[],
 ): Promise<SaveAllResult> {
-  // Convert selections Map to plain object for JSON serialization
+  // Build selections payload from the current effective frame state.
+  // For each TS, compute the effective selection for every frame by
+  // combining the original frame.selected with any user overrides.
   const selectionsPayload: Record<string, Record<number, boolean>> = {};
 
-  for (const [mdocPath, tsSelections] of selectionsState) {
-    if (tsSelections.size > 0) {
-      selectionsPayload[mdocPath] = Object.fromEntries(tsSelections);
+  for (const ts of tiltSeries) {
+    const tsOverrides = selectionsState.get(ts.mdocPath);
+    const effective: Record<number, boolean> = {};
+    for (const frame of ts.frames) {
+      const override = tsOverrides?.get(frame.zIndex);
+      effective[frame.zIndex] = override ?? frame.selected;
     }
+    selectionsPayload[ts.mdocPath] = effective;
   }
 
   // Send save request
@@ -175,6 +188,7 @@ export async function saveAll(
 
   // Handle deletions if any
   let deleteResult = { deleted: [] as string[], failed: [] as string[] };
+  let deleteOk = true;
   if (deletePaths && deletePaths.length > 0) {
     const deleteResponse = await fetch(`${API_BASE}/api/mdoc/delete-all`, {
       method: "POST",
@@ -185,14 +199,17 @@ export async function saveAll(
     if (deleteResponse.ok) {
       deleteResult = await deleteResponse.json();
     }
+    deleteOk = deleteResponse.ok;
   }
 
   return {
-    success: saveResult.success && (deleteResult.failed?.length === 0),
+    success: saveResult.success && (!deletePaths || deletePaths.length === 0 || deleteOk),
     saved: saveResult.saved || [],
     failed: [...(saveResult.failed || []), ...(deleteResult.failed || [])],
     deleted: deleteResult.deleted || [],
-    message: saveResult.message,
+    message: saveResult.success
+      ? saveResult.message
+      : `Save succeeded, but delete had errors: ${deleteResult.failed?.join(", ") || "unknown"}`,
   };
 }
 

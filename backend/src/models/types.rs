@@ -17,6 +17,10 @@ pub struct Frame {
     /// Source MRC file modification time (epoch seconds). Used by the frontend
     /// to validate whether a cached PNG is still fresh for this source file.
     pub mrc_mtime: u64,
+    /// DateTime from the mdoc entry (HH:MM:SS DD-Mon-YY format).
+    /// Used by the frontend for time-based sorting of frames.
+    #[serde(default)]
+    pub date_time: String,
 }
 
 /// Represents a complete tilt series from an mdoc file.
@@ -45,14 +49,6 @@ pub struct ScanConfig {
     pub image_suffix_cut: i32,
 }
 
-/// Response from project scan operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct MdocScanResponse {
-    pub tilt_series: Vec<TiltSeries>,
-    pub total: usize,
-}
-
 /// Request to save all mdoc changes.
 #[derive(Debug, Deserialize)]
 pub struct SaveAllRequest {
@@ -68,6 +64,8 @@ pub struct SaveAllResponse {
     pub failed: Vec<String>,
     pub deleted: Vec<String>,
     pub message: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub backups: Vec<String>,
 }
 
 /// Request to delete multiple mdoc files.
@@ -104,19 +102,4 @@ pub struct BackupDeleteResponse {
     pub backup_path: Option<String>,
 }
 
-/// Request for saving a config file.
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct SaveConfigRequest {
-    pub mdoc_dir: String,
-    pub image_dir: String,
-    pub png_dir: String,
-    #[serde(default)]
-    pub mdoc_prefix_cut: i32,
-    #[serde(default)]
-    pub mdoc_suffix_cut: i32,
-    #[serde(default)]
-    pub image_prefix_cut: i32,
-    #[serde(default)]
-    pub image_suffix_cut: i32,
-}
+

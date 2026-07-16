@@ -70,6 +70,7 @@ pub fn parse_mdoc_file(mdoc_path: &str, matcher: &ImageMatcher) -> Result<TiltSe
             mrc_path,
             selected: matched,
             mrc_mtime,
+            date_time: block.get("DateTime").unwrap_or_default().trim().to_string(),
         });
     }
 

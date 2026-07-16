@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAppState } from "@/lib/store";
 import { saveAll, scanProject, listTiltSeries } from "@/lib/api";
@@ -8,10 +8,17 @@ import { cacheAllMdocs, clearCache, validateTsCache } from "@/lib/cache";
 import { TiltSeriesCard } from "./tilt-series-card";
 import { ScanDialog } from "./scan-dialog";
 import { CacheManager } from "./cache-manager";
-import type { ScanConfig, TiltSeries } from "@/lib/types";
+import type { Frame, ScanConfig, TiltSeries } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function Gallery() {
   const {
@@ -28,6 +35,7 @@ export function Gallery() {
   const [expandedTs, setExpandedTs] = useState<Set<string>>(new Set());
   const [selectedTsIds, setSelectedTsIds] = useState<Set<string>>(new Set());
   const [thumbSize, setThumbSize] = useState(128);
+  const [bin, setBin] = useState(8);
   const [isSaving, setIsSaving] = useState(false);
   const [showScanDialog, setShowScanDialog] = useState(false);
   const [isCaching, setIsCaching] = useState(false);
@@ -36,6 +44,9 @@ export function Gallery() {
     total: 0,
     currentTs: "",
   });
+  const [deletedFrames, setDeletedFrames] = useState<Map<string, Frame[]>>(new Map());
+  const [sortBy, setSortBy] = useState<"angle" | "time">("angle");
+  const [showDeleted, setShowDeleted] = useState(false);
 
   // Load persisted state on mount
   useEffect(() => {
@@ -43,30 +54,47 @@ export function Gallery() {
     try {
       const saved = localStorage.getItem("gallery_thumbSize");
       if (saved) setThumbSize(parseInt(saved, 10));
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to load persisted thumbSize:", e);
+    }
+    // Load bin
+    try {
+      const saved = localStorage.getItem("gallery_bin");
+      if (saved) setBin(parseInt(saved, 10));
+    } catch (e) {
+      console.warn("Failed to load persisted bin:", e);
+    }
   }, []);
 
   // Validate cached PNGs after restoring persisted tilt series.
   useEffect(() => {
     for (const ts of tiltSeries) {
-      validateTsCache(ts, 8).catch(() => {});
+      validateTsCache(ts, bin).catch((e) => {
+        console.warn(`[cache] Failed to validate ${ts.id}:`, e);
+      });
     }
-  }, [tiltSeries]);
+  }, [tiltSeries, bin]);
 
   // Save thumbSize
   useEffect(() => {
     localStorage.setItem("gallery_thumbSize", thumbSize.toString());
   }, [thumbSize]);
 
-  // Expand all when tilt series load
+  // Save bin
   useEffect(() => {
-    if (tiltSeries.length > 0 && expandedTs.size === 0) {
+    localStorage.setItem("gallery_bin", bin.toString());
+  }, [bin]);
+
+  const hasInitiallyExpanded = useRef(false);
+
+  // Expand all when tilt series load (only on initial load, not after collapse)
+  useEffect(() => {
+    if (tiltSeries.length > 0 && !hasInitiallyExpanded.current) {
+      hasInitiallyExpanded.current = true;
       setExpandedTs(new Set(tiltSeries.map((ts) => ts.id)));
-    }
-    if (tiltSeries.length > 0 && selectedTsIds.size === 0) {
       setSelectedTsIds(new Set(tiltSeries.map((ts) => ts.id)));
     }
-  }, [tiltSeries, expandedTs.size, selectedTsIds.size]);
+  }, [tiltSeries]);
 
   const toggleTs = useCallback((tsId: string) => {
     setExpandedTs((prev) => {
@@ -94,92 +122,18 @@ export function Gallery() {
     });
   }, []);
 
-  const applyBatchFilter = useCallback(
-    (preset: "center" | "edges" | "alternate" | "all" | "none") => {
-      if (selectedTsIds.size === 0) {
-        toast.warning("No tilt series selected", {
-          description: "Select one or more TS first",
-        });
-        return;
-      }
-
-      let applied = 0;
-      for (const ts of tiltSeries) {
-        if (selectedTsIds.has(ts.id)) {
-          applyQuickFilter(ts, preset);
-          applied++;
-        }
-      }
-      toast.success(`Applied ${preset} filter to ${applied} tilt series`);
-    },
-    [tiltSeries, selectedTsIds],
-  );
-
-  const applyQuickFilter = useCallback(
-    (
-      ts: TiltSeries,
-      preset: "center" | "edges" | "alternate" | "all" | "none",
-    ) => {
-      const selectionsMap = new Map<number, boolean>();
-      const totalFrames = ts.frames.length;
-
-      switch (preset) {
-        case "center": {
-          const start = Math.floor(totalFrames * 0.2);
-          const end = Math.ceil(totalFrames * 0.8);
-          ts.frames.forEach((frame, idx) => {
-            selectionsMap.set(
-              frame.zIndex,
-              idx >= start && idx <= end,
-            );
-          });
-          break;
-        }
-        case "edges": {
-          const edgeSize = Math.floor(totalFrames * 0.2);
-          ts.frames.forEach((frame, idx) => {
-            selectionsMap.set(
-              frame.zIndex,
-              idx < edgeSize || idx >= totalFrames - edgeSize,
-            );
-          });
-          break;
-        }
-        case "alternate": {
-          ts.frames.forEach((frame, idx) => {
-            selectionsMap.set(frame.zIndex, idx % 2 === 0);
-          });
-          break;
-        }
-        case "all": {
-          for (const frame of ts.frames) {
-            selectionsMap.set(frame.zIndex, true);
-          }
-          break;
-        }
-        case "none": {
-          for (const frame of ts.frames) {
-            selectionsMap.set(frame.zIndex, false);
-          }
-          break;
-        }
-      }
-
-      setBatchSelection(ts.mdocPath, selectionsMap);
-      toast.success(`Applied ${preset} filter`, { description: ts.id });
-    },
-    [setBatchSelection],
-  );
-
   const handleScan = useCallback(
     async (config: ScanConfig) => {
       try {
         const series = await scanProject(config);
         setTiltSeries(series);
+        setDeletedFrames(new Map());
         setShowScanDialog(false);
         // Evict cached PNGs whose backend disk mtime has changed.
         for (const ts of series) {
-          validateTsCache(ts, 8).catch(() => {});
+          validateTsCache(ts, bin).catch((e) => {
+            console.warn(`[cache] Failed to validate ${ts.id}:`, e);
+          });
         }
         toast.success(`Scanned ${series.length} tilt series`);
       } catch (e) {
@@ -206,12 +160,28 @@ export function Gallery() {
         }
       }
 
-      if (selections.size === 0 && deletePaths.length === 0) {
-        toast.info("No changes to save");
-        return;
+      // Compute which frames will be removed BEFORE saving (for "Show Deleted")
+      const removedFrames = new Map<string, Frame[]>();
+      for (const ts of tiltSeries) {
+        if (deletePaths.includes(ts.mdocPath)) {
+          // Entire TS will be deleted — all frames are removed
+          removedFrames.set(ts.mdocPath, [...ts.frames]);
+          continue;
+        }
+        const removed: Frame[] = [];
+        for (const frame of ts.frames) {
+          const effective = getFrameSelection(ts.mdocPath, frame.zIndex, frame.selected);
+          if (!effective) {
+            removed.push(frame);
+          }
+        }
+        if (removed.length > 0) {
+          removedFrames.set(ts.mdocPath, removed);
+        }
       }
 
-      const result = await saveAll(selections, deletePaths);
+      // Always proceed with save (selections may be empty but effective state has changes)
+      const result = await saveAll(tiltSeries, selections, deletePaths);
 
       // Refresh tilt series from backend to reflect saved changes
       // (deselected frames removed, angle ranges recalculated)
@@ -225,6 +195,9 @@ export function Gallery() {
           setTiltSeries(tiltSeries.filter((ts) => !deletedSet.has(ts.mdocPath)));
         }
       }
+
+      // Store removed frames for "Show Deleted" feature
+      setDeletedFrames(removedFrames);
 
       // Clear all selections
       clearAllSelections();
@@ -256,6 +229,7 @@ export function Gallery() {
     selectedTsIds,
     setTiltSeries,
     clearAllSelections,
+    getFrameSelection,
   ]);
 
   const handleCacheAll = useCallback(async () => {
@@ -268,7 +242,7 @@ export function Gallery() {
 
     setIsCaching(true);
     try {
-      const result = await cacheAllMdocs(tiltSeries, (progress) => {
+      const result = await cacheAllMdocs(tiltSeries, bin, (progress) => {
         setCacheProgress({
           cached: progress.current,
           total: progress.total,
@@ -362,10 +336,62 @@ export function Gallery() {
                 ☐ Clear
               </Button>
             </div>
+            <div className="flex items-center gap-1 border-l pl-2">
+              <span className="text-xs text-muted-foreground">Sort:</span>
+              <Button
+                variant={sortBy === "angle" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSortBy("angle")}
+                className="h-7 text-xs"
+              >
+                Angle ↑
+              </Button>
+              <Button
+                variant={sortBy === "time" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSortBy("time")}
+                className="h-7 text-xs"
+              >
+                Time
+              </Button>
+            </div>
+            {deletedFrames.size > 0 && (
+              <div className="flex items-center gap-1 border-l pl-2">
+                <Button
+                  variant={showDeleted ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setShowDeleted((prev) => !prev)}
+                  className={
+                    showDeleted
+                      ? "h-7 border-pink-400 bg-pink-50 text-pink-700 hover:bg-pink-100"
+                      : "h-7"
+                  }
+                >
+                  {showDeleted ? "Hide Deleted" : "Show Deleted"}
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
             <Badge variant="outline">{stats.totalSeries} TS</Badge>
+            <div className="flex items-center gap-2 px-2">
+              <span className="text-xs text-muted-foreground">Bin:</span>
+              <Select
+                value={bin.toString()}
+                onValueChange={(value) => setBin(Number(value))}
+              >
+                <SelectTrigger className="h-7 w-16">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1x</SelectItem>
+                  <SelectItem value="2">2x</SelectItem>
+                  <SelectItem value="4">4x</SelectItem>
+                  <SelectItem value="8">8x</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex items-center gap-2 px-2">
               <span className="text-xs text-muted-foreground">Zoom:</span>
               <Slider
@@ -400,7 +426,7 @@ export function Gallery() {
 
       {/* Content */}
       <div className="p-4">
-        {/* Batch operations */}
+        {/* Batch filter operations */}
         {selectedTsIds.size > 0 && (
           <div className="mb-4 flex items-center gap-2">
             <span className="text-sm font-medium">
@@ -410,23 +436,36 @@ export function Gallery() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => applyBatchFilter("all")}
+                onClick={() => {
+                  for (const ts of tiltSeries) {
+                    if (selectedTsIds.has(ts.id)) {
+                      const map = new Map<number, boolean>();
+                      for (const frame of ts.frames) {
+                        map.set(frame.zIndex, true);
+                      }
+                      setBatchSelection(ts.mdocPath, map);
+                    }
+                  }
+                }}
               >
                 ☑ All
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => applyBatchFilter("none")}
+                onClick={() => {
+                  for (const ts of tiltSeries) {
+                    if (selectedTsIds.has(ts.id)) {
+                      const map = new Map<number, boolean>();
+                      for (const frame of ts.frames) {
+                        map.set(frame.zIndex, false);
+                      }
+                      setBatchSelection(ts.mdocPath, map);
+                    }
+                  }
+                }}
               >
                 ☐ None
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => applyBatchFilter("alternate")}
-              >
-                ↻ Alternate
               </Button>
             </div>
           </div>
@@ -452,6 +491,13 @@ export function Gallery() {
               isExpanded={expandedTs.has(ts.id)}
               isSelected={selectedTsIds.has(ts.id)}
               thumbSize={thumbSize}
+              bin={bin}
+              sortBy={sortBy}
+              showDeleted={showDeleted}
+              deletedFrames={deletedFrames.get(ts.mdocPath) || []}
+              onDeletedFrameToggle={(zIndex, selected) => {
+                setFrameSelection(ts.mdocPath, zIndex, selected);
+              }}
               onToggle={() => toggleTs(ts.id)}
               onToggleSelection={() => toggleTsSelection(ts.id)}
               onSelectAll={(select) => {
@@ -474,7 +520,7 @@ export function Gallery() {
                 setBatchSelection(ts.mdocPath, map);
               }}
               onReset={() => clearTsSelections(ts.mdocPath)}
-              onQuickFilter={(preset) => applyQuickFilter(ts, preset)}
+              onReset={() => clearTsSelections(ts.mdocPath)}
               onFrameToggle={(frame) => {
                 const current = getFrameSelection(
                   ts.mdocPath,

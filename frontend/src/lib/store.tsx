@@ -22,6 +22,9 @@ const CURRENT_STORAGE_VERSION = 2;
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tiltSeries, setTiltSeriesState] = useState<TiltSeries[]>([]);
   const [selections, setSelections] = useState<SelectionState>(new Map());
+  const selectionsRef = useRef<SelectionState>(new Map());
+  // Keep ref in sync with latest selections state
+  selectionsRef.current = selections;
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Hydration-safe localStorage restore — runs once on client after mount,
@@ -52,19 +55,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         setSelections(selections);
       }
-    } catch {
-      // Ignore corrupt localStorage data
+    } catch (e) {
+      console.warn("Failed to restore persisted state:", e);
     }
   }, []);
 
   const persistSelections = useCallback((state: SelectionState) => {
     // Debounced persist to localStorage
+    selectionsRef.current = state;
     if (persistTimeoutRef.current) {
       clearTimeout(persistTimeoutRef.current);
     }
     persistTimeoutRef.current = setTimeout(() => {
       const serializable: Record<string, Record<number, boolean>> = {};
-      for (const [mdocPath, tsSelections] of state) {
+      for (const [mdocPath, tsSelections] of selectionsRef.current) {
         serializable[mdocPath] = Object.fromEntries(tsSelections);
       }
       if (typeof localStorage !== 'undefined') {

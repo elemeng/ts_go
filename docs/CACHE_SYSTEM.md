@@ -17,11 +17,11 @@ This document describes the caching architecture for PNG images, MDOC files, and
 
 ## PNG Cache System
 
-### Frontend Architecture (src/lib/cache.ts)
+### Frontend Architecture (`src/lib/cache.ts`)
 
-#### Two-Tier Caching
+#### Two-Tier Cache Hierarchy
 
-The PNG cache uses a hierarchical two-tier design with independent eviction policies:
+The PNG cache uses a hierarchical design:
 
 ```
 Request → Memory Cache → IndexedDB → Backend API
@@ -30,45 +30,42 @@ Request → Memory Cache → IndexedDB → Backend API
          (miss: fetch from backend, cache both)
 ```
 
-**Key Design Principle:** Memory cache and IndexedDB operate independently. Items evicted from memory remain in IndexedDB until the IndexedDB quota is exceeded or the user explicitly deletes them.
+**Key Design Principle:** Memory cache and IndexedDB operate independently. Items evicted from memory remain in IndexedDB until explicitly deleted.
 
 #### 1. Memory Cache (LRU)
 
 - **Maximum Size:** 2GB
 - **Data Structure:** `Map<string, PngCacheItem>`
-- **Cache Key Format:** `{tsId}_{zIndex}_bin{bin}_q{quality}`
-- **Eviction Policy:** LRU when exceeding 90% capacity (memory only, does NOT delete from IndexedDB)
+- **Cache Key Format:** `{tsId}_{zIndex}_bin{bin}`
+- **Eviction Policy:** LRU when exceeding 2GB capacity
 - **Tracked Properties:**
   - `data`: Blob (PNG image data)
   - `size`: number (bytes)
   - `timestamp`: number (last access time)
+  - `mrcPath`: string (source file path, used for validity)
+  - `pngMtime`: number (disk PNG mtime for staleness checks)
 
 **Key Functions:**
 
 ```typescript
-// Get PNG with automatic promotion
-async function getPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob | null>
+// Get PNG with automatic promotion from IndexedDB
+async function getPng(tsId: string, zIndex: number, mrcPath: string, bin = 8): Promise<{ blob: Blob; pngMtime: number } | null>
 
-// Store in memory with LRU eviction (syncs to IndexedDB)
-async function putPngToMemory(key: string, data: Blob): Promise<void>
+// Store in memory + IndexedDB
+async function putPng(tsId: string, zIndex: number, data: Blob, mrcPath: string, pngMtime: number, bin = 8): Promise<void>
 
-// Clear all memory cache
+// Clear all memory + IndexedDB cache
 async function clearCache(): Promise<void>
-
-// Clear specific tilt series (user action, deletes from both tiers)
-async function clearCacheForTs(tsId: string): Promise<void>
 ```
 
 #### 2. IndexedDB Cache
 
-- **Maximum Size:** 10GB
 - **Database Name:** `TsSvCache`
-- **Version:** 1
+- **Version:** 2
 - **Store Name:** `pngs`
 - **Persistence:** Survives browser restarts
-- **Operations:** Async with Promise-based API
-- **Size Tracking:** Real-time calculation and monitoring
-- **Eviction Policy:** Quota-based when exceeding 10GB (independent of memory eviction)
+- **No quota management** (relies on browser's built-in storage limits)
+- **DB version bumps** purge stale cache entries when key format changes
 
 **Initialization:**
 
@@ -76,89 +73,57 @@ async function clearCacheForTs(tsId: string): Promise<void>
 async function initDB(): Promise<IDBDatabase>
 ```
 
-**Key Functions:**
+#### Cache Validation
+
+The frontend validates cached PNGs against backend disk mtimes:
 
 ```typescript
-// Store in both memory and IndexedDB
-async function putPng(tsId: string, zIndex: number, data: Blob, bin = 8, quality = 90): Promise<void>
-
-// Retrieve from IndexedDB and promote to memory
-async function getPng(tsId: string, zIndex: number, bin = 8, quality = 90): Promise<Blob | null>
-
-// Check and enforce IndexedDB quota (evicts if needed)
-async function checkIndexedDbQuota(newItemSize: number): Promise<void>
-
-// Update IndexedDB size tracking
-async function updateIndexedDbSize(): Promise<void>
-
-// Delete from IndexedDB (user action or quota eviction)
-async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota'): Promise<void>
+// Validate cached PNGs for a tilt series against backend mtimes
+async function validateTsCache(ts: TiltSeries, bin = 8): Promise<void>
 ```
 
-**IndexedDB Eviction Strategy:**
+This fetches current disk mtimes from the backend and evicts any cached entries whose stored `pngMtime` differs from the backend's current value.
 
-When the 10GB quota is exceeded, items are evicted in this order:
-1. **Priority 1:** Items not in memory cache (least recently accessed)
-2. **Priority 2:** Oldest items in memory cache (by timestamp)
-
-This ensures that frequently accessed items are preserved while freeing space for new items.
-
-#### Cache Management Functions
+#### Bulk Caching
 
 ```typescript
-// Pre-cache all PNGs for offline use
-async function cacheAll(): Promise<{ success: number; failed: number; total: number }>
+// Cache all selected frames of a single tilt series (concurrency = 6)
+async function cacheMdoc(ts: TiltSeries, onProgress?: (current: number, total: number) => void): Promise<{ success: number; failed: number }>
 
-// Force re-fetch from backend (sync after external changes)
-async function refreshCache(): Promise<{ success: number; failed: number; total: number }>
-
-// Delete all cached PNGs
-async function deleteCache(): Promise<void>
+// Cache all tilt series sequentially
+async function cacheAllMdocs(tiltSeries: TiltSeries[], onProgress?: (progress) => void): Promise<{ success: number; failed: number; total: number }>
 ```
 
-#### Cache Monitoring
-
-```typescript
-// Writable stores for cache size
-export const currentCacheSize = writable(0)  // Memory cache size in bytes
-export const indexedDbCacheSize = writable(0)  // IndexedDB cache size in bytes
-
-// Derived store for cache warnings
-export const cacheWarning = derived(
-  [currentCacheSize, indexedDbCacheSize],
-  ([$currentCacheSize, $indexedDbCacheSize]) => ({
-    memoryExceeded: $currentCacheSize > MAX_MEMORY_CACHE * 0.9,
-    indexedDbExceeded: $indexedDbCacheSize > MAX_INDEXEDDB_CACHE * 0.9,
-    evictionNeeded: $currentCacheSize > MAX_MEMORY_CACHE
-  })
-)
-```
-
-### Backend Architecture (backend/src/cache/lru.rs)
+### Backend Architecture (`backend/src/cache/lru.rs`)
 
 #### LRU Cache
 
 - **Maximum Size:** 2048MB (2GB)
-- **Data Structure:** `OrderedDict`
-- **Cache Key:** MD5 hash of `{tsId}_{frameId}_bin{bin}_q{quality}`
-- **Eviction Policy:** Automatic when exceeding capacity
-- **Instance:** Global singleton `png_cache`
+- **Data Structure:** `HashMap<u64, PngCacheEntry>`
+- **Cache Key:** Hash of `{ts_id}_{frame_id}_bin{bin}` via `DefaultHasher`
+- **Eviction Policy:** When over capacity, evicts the entry with the oldest `last_accessed` timestamp (O(n) scan, only on write path)
+- **Instance:** Global singleton `PNG_CACHE`
+
+**Entry Fields:**
+- `data: Vec<u8>` — raw PNG bytes
+- `mtime: Option<u64>` — disk mtime of the cached PNG file
+- `last_accessed: u64` — epoch seconds of last access (for LRU eviction)
 
 **Key Functions:**
 
 ```rust
-pub fn get(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Option<Vec<u8>>
-pub fn put(ts_id: &str, frame_id: i32, bin: i32, quality: i32, data: Vec<u8>)
-pub fn clear()
+pub fn get(&mut self, ts_id: &str, frame_id: i32, bin: i32) -> Option<&PngCacheEntry>
+pub fn put(&mut self, ts_id: &str, frame_id: i32, bin: i32, data: Vec<u8>, mtime: Option<u64>)
+pub fn clear(&mut self)
 ```
 
-### Backend Disk Cache (backend/src/routes/preview.rs)
+### Backend Disk Cache (`backend/src/routes/preview.rs`)
 
 #### File System Cache
 
-- **Path Pattern:** `{png_dir}/{ts_id}/bin{bin}/frame_{frame_id:04d}_q{quality}.png`
-- **Checked After:** Memory cache check
-- **Updated On:** PNG generation
+- **Path Pattern:** `{png_dir}/{ts_id}/bin{bin}/frame_{frame_id:04d}.png`
+- **Checked After:** Memory cache check (middle tier)
+- **Updated On:** PNG generation (saved to disk after processing)
 
 **Cache Hierarchy:**
 
@@ -166,26 +131,26 @@ pub fn clear()
 Request → Memory Cache → Disk Cache → PNG Generation
          (hit: update timestamp)
          (miss: check disk, update memory)
-         (miss: generate, update both)
+         (miss: generate, save to disk + memory)
 ```
 
 ### Concurrent Task Deduplication
 
-The backend prevents duplicate PNG generation:
+The backend prevents duplicate PNG generation when multiple requests arrive simultaneously for the same frame:
 
 ```rust
-static INFLIGHT: LazyLock<Mutex<HashMap<String, oneshot::Receiver<Vec<u8>>>>>;
+static INFLIGHT: LazyLock<Mutex<HashMap<String, oneshot::Receiver<(Vec<u8>, Option<u64>)>>>>;
 ```
 
-If multiple requests for the same PNG arrive simultaneously, they wait for the first request to complete.
+When a request arrives while another is already processing the same frame, the second request waits on the `oneshot::Receiver` for the first to complete. The inflight entry is always cleaned up after processing (success or failure) to prevent stale entries.
 
 ---
 
 ## MDOC Cache System
 
-### Backend State Management (backend/src/state/project_state.rs)
+### Backend State Management (`backend/src/state/project_state.rs`)
 
-#### Project State Class
+#### Project State
 
 ```rust
 pub struct ProjectState {
@@ -197,55 +162,52 @@ pub struct ProjectState {
 **Key Operations:**
 
 ```rust
-pub async fn set_config(config: ScanConfig)          // Reset state on new scan
-pub async fn add_tilt_series(ts: TiltSeries)         // Store parsed tilt series
+pub async fn set_config(config: ScanConfig)                              // Reset state on new scan
+pub async fn add_tilt_series(ts: TiltSeries)                             // Store parsed tilt series
 pub async fn get_tilt_series(ts_id: &str) -> Option<TiltSeries>
 pub async fn list_tilt_series() -> Vec<TiltSeries>
 pub async fn remove_tilt_series_by_mdoc_path(mdoc_path: &str)
-pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> bool
+pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> Result<(), String>
 ```
 
-**Global Instance:** `project_state` (singleton)
+**Global Instance:** `PROJECT_STATE` (singleton via `LazyLock`)
 
-### Frontend Persistence (src/lib/store.ts)
+### Frontend Persistence (`src/lib/store.tsx`)
 
 #### TiltSeries Storage
 
 - **localStorage Key:** `ts_tiltSeries`
-- **Auto-save:** On changes (when data exists)
-- **Load:** On app init via `loadPersistedTiltSeries()`
-- **Clear:** After successful save
-
-```typescript
-export const tiltSeries = writable<TiltSeries[]>([])
-```
+- **Auto-save:** On changes via `setTiltSeries`
+- **Load:** On app mount from `useEffect` hydration
+- **Clear:** After successful save (backend refresh)
+- **Version check:** `ts_storage_version` key purges stale data on format changes
 
 #### Selection State
 
 **Type Definition:**
 
 ```typescript
-export type SelectionState = Map<mdocPath, Map<zIndex, boolean>>
+type SelectionState = Map<mdocPath, Map<zIndex, boolean>>
 ```
 
 - **localStorage Key:** `ts_selections`
 - **Debounce:** 1 second to avoid excessive writes
-- **Load:** On app init via `loadPersistedSelections()`
+- **Load:** On app mount from `useEffect` hydration
 - **Clear:** After successful save
 
-**Key Functions:**
+**Key Functions (via `AppProvider` context):**
 
 ```typescript
-function getFrameSelection(mdocPath: string, zIndex: number, original: boolean, selectionsState?: Map) → boolean
+function getFrameSelection(mdocPath: string, zIndex: number, original: boolean): boolean
 function setFrameSelection(mdocPath: string, zIndex: number, selected: boolean): void
 function setBatchSelection(mdocPath: string, selectionsMap: Map<number, boolean>): void
 function clearTsSelections(mdocPath: string): void
-function debouncePersist(): void  // Throttled localStorage writes
+function clearAllSelections(): void
 ```
 
 ### MDOC File Operations
 
-#### Parser (backend/src/mdoc/parser.rs)
+#### Parser (`backend/src/mdoc/parser.rs`)
 
 **Format:** SerialEM mdoc
 
@@ -255,15 +217,16 @@ function debouncePersist(): void  // Throttled localStorage writes
 
 **Extracted Fields:**
 - `TiltAngle`: Frame angle
-- `SubFramePath`: Image path (matched to actual files)
-- `mrcPath`: Resolved image path via ImageMatcher
+- `SubFramePath`: Image path (matched to actual files via `ImageMatcher`)
+- `mrcPath`: Resolved image path
+- `mrcMtime`: Source file modification time
 
-**Returns:** `TiltSeries` with parsed frames
+**Returns:** `Result<TiltSeries, String>` with parsed frames
 
-#### Writer (backend/src/mdoc/writer.rs)
+#### Writer (`backend/src/mdoc/writer.rs`)
 
 **Operations:**
-1. Create backup: `{mdocPath}.bak`
+1. Create timestamped backup: `{mdocPath}.{timestamp}.bak`
 2. Parse the mdoc file via `emdoc`
 3. Remove unselected frame blocks (by ZValue)
 4. Write to `.mdoc.tmp` → atomic rename to `.mdoc`
@@ -278,14 +241,16 @@ pub fn write_mdoc_with_selections(
 ) -> Result<String, String>
 ```
 
-### API Endpoints (backend/src/routes/mdoc.rs)
+### API Endpoints (`backend/src/routes/mdoc.rs`)
 
 ```
 POST /api/mdoc/scan           # Scan directory, parse all mdoc files
 GET  /api/mdoc/list           # List all tilt series
 GET  /api/mdoc/{ts_id}        # Get specific tilt series
-POST /api/mdoc/batch-save     # Save selections, backup, re-parse
-POST /api/mdoc/backup-delete  # Backup and delete mdoc file
+POST /api/mdoc/save-all       # Save all selections (batch)
+POST /api/mdoc/delete-all     # Delete multiple mdoc files
+POST /api/mdoc/batch-save     # Save selections for a single mdoc
+POST /api/mdoc/backup-delete  # Backup and delete an mdoc file
 ```
 
 ---
@@ -294,11 +259,9 @@ POST /api/mdoc/backup-delete  # Backup and delete mdoc file
 
 ### Frontend State Architecture
 
-### Frontend State Architecture
+#### React `useState` (`gallery.tsx`)
 
-#### React useState (Gallery.tsx)
-
-**UI State (via `useState`):**
+**UI State:**
 
 ```typescript
 const [expandedTs, setExpandedTs] = useState<Set<string>>(new Set());
@@ -312,15 +275,15 @@ const [cacheProgress, setCacheProgress] = useState({ cached: 0, total: 0, curren
 const [showScanDialog, setShowScanDialog] = useState(false);
 ```
 
-#### React Context (src/lib/store.tsx)
+#### React Context (`src/lib/store.tsx`)
 
 Global state shared across components via `createContext` + `useContext`:
 
 ```typescript
 interface AppState {
-  tiltSeries: TiltSeries[];                          // All tilt series
-  setTiltSeries: (series: TiltSeries[]) => void;     // Update on scan/save
-  selections: SelectionState;                         // Map<mdocPath, Map<zIndex, boolean>>
+  tiltSeries: TiltSeries[];
+  setTiltSeries: (series: TiltSeries[]) => void;
+  selections: SelectionState;
   setFrameSelection: (mdocPath, zIndex, selected) => void;
   setBatchSelection: (mdocPath, selectionsMap) => void;
   clearTsSelections: (mdocPath) => void;
@@ -329,16 +292,14 @@ interface AppState {
 }
 ```
 
-**Persistence:** Both `tiltSeries` and `selections` are persisted to `localStorage` on change. On app mount, they are restored from `localStorage` via lazy `useState` initializers.
+**Persistence:** Both `tiltSeries` and `selections` are persisted to `localStorage` on change. On app mount, they are restored via hydration effects.
 
 **Key behavior:**
 - `selections` act as **overrides** — if a frame has no selection override, the original `frame.selected` value from the scan is used
-- Selections are debounced (1s) before writing to `localStorage` to reduce I/O
+- Selections are debounced (1s) before writing to `localStorage`
 - On successful save, selections are cleared entirely
 
 #### Toast Notifications (sonner)
-
-Notifications use the `sonner` library's `toast()` function directly, not a dedicated store:
 
 ```typescript
 import { toast } from 'sonner';
@@ -349,13 +310,15 @@ toast.warning('No tilt series selected');
 toast.info('No changes to save');
 ```
 
-### Frontend Persistence
+### Persistence
 
 **localStorage Keys:**
 
 ```typescript
 'ts_tiltSeries'           // Tilt series data
 'ts_selections'           // Frame selections (debounced 1s)
+'ts_storage_version'      // Cache version (purges stale data on mismatch)
+'ts_scan_config'          // Persisted scan dialog config
 'gallery_thumbSize'       // Thumbnail width in pixels
 ```
 
@@ -363,7 +326,7 @@ toast.info('No changes to save');
 
 ```
 Scan → Parse MDOC → Store in project_state → Return to frontend
-Save → Write MDOC → Backup → Re-parse → Update project_state → Clear overrides
+Save → Write MDOC → Backup → Update project_state → Clear overrides
 Delete → Backup → Delete file → Remove from project_state
 ```
 
@@ -375,36 +338,32 @@ Delete → Backup → Delete file → Remove from project_state
 
 1. **Initial Load:** Check memory → IndexedDB → Backend
 2. **On Display:** Lazy load via intersection observer
-3. **After Save:** Clear cache for affected tilt series
-4. **Manual Operations:** Cache all / Refresh / Delete
+3. **After Scan:** Validate cached PNGs against backend mtimes
+4. **Manual Operations:** Cache all / Clear cache
 
 ### MDOC Cache Lifecycle
 
 1. **Scan:** Parse all mdoc files, store in project_state
 2. **Load:** Restore from localStorage
 3. **Edit:** Track overrides in selections store
-4. **Save:** Write to file, backup, re-parse, clear overrides
+4. **Save:** Write to file, backup, update state, clear overrides
 5. **Delete:** Backup, remove file, clear from state
 
 ### Cache Invalidation
 
 **PNG Memory Cache Cleared On:**
 - LRU eviction (when exceeding 2GB limit)
-- Manual delete operation
-- Refresh cache operation
-- Save operation (per tilt series)
+- Manual clear operation
+- `validateTsCache` (stale mtime mismatch)
 
 **PNG IndexedDB Cache Cleared On:**
-- User explicit delete operations (deleteCache, clearCacheForTs)
-- Refresh cache operation
-- Quota eviction (when exceeding 10GB limit)
-- Save operation (per tilt series)
+- Manual clear operation
+- `validateTsCache` (stale mtime mismatch)
+- DB version upgrade
 
-**Note:** Items evicted from memory cache remain in IndexedDB until quota is exceeded or user explicitly deletes them.
-
-**MDOC Cache Cleared On:**
+**MDOC State Cleared On:**
 - New scan
-- Save operation
+- Save operation (state updated)
 - Delete operation
 
 **Selections Cleared On:**
@@ -420,18 +379,17 @@ Delete → Backup → Delete file → Remove from project_state
 **Strengths:**
 - Two-tier design balances speed and capacity
 - LRU eviction prevents memory overflow
-- IndexedDB provides persistence
-- Lazy loading reduces initial load time
-- Concurrent task deduplication (backend)
+- IndexedDB provides persistence across reloads
+- Lazy loading via IntersectionObserver reduces initial load time
+- Concurrent task deduplication prevents duplicate PNG generation
 
 **Optimizations:**
 - Memory cache for frequently accessed PNGs (fast access layer)
 - IndexedDB for persistent storage (independent of memory eviction)
 - Automatic promotion from IndexedDB to memory on access
 - LRU eviction for memory (2GB limit)
-- Quota-based eviction for IndexedDB (10GB limit)
-- Real-time IndexedDB size tracking
-- Concurrent request deduplication
+- Backend disk cache acts as a middle tier
+- Concurrent request deduplication via inflight task map
 
 ### MDOC Cache
 
@@ -444,133 +402,109 @@ Delete → Backup → Delete file → Remove from project_state
 **Optimizations:**
 - In-memory project_state for fast access
 - Debounced localStorage writes (1 second)
-- ImageMatcher cache for file path resolution
-- Selective cache invalidation
+- ImageMatcher file cache with prefix/suffix filtering
 
 ### Potential Issues
 
 1. **localStorage Capacity:**
    - localStorage has 5-10MB limit
    - May overflow with large tiltSeries data
-   - No compression or chunking strategy
+   - Version-based purging helps migrate formats
 
 2. **Cache Versioning:**
-   - No cache versioning strategy
-   - No migration path for cache format changes
-   - Potential for stale data after updates
+   - `ts_storage_version` key enables format migration
+   - DB version bumps purge IndexedDB on format changes
 
 3. **Memory Usage:**
    - Multiple state stores may consume significant memory
-   - No memory cleanup on component unmount
-   - Potential memory leaks with long-running sessions
+   - LRU eviction bounds the memory cache at 2GB
 
-4. **IndexedDB Quota Management:**
-   - Quota eviction is triggered on each put operation
-   - May cause performance impact with large datasets
-   - No manual quota management controls for users
+4. **IndexedDB Quota:**
+   - Relies on browser's built-in storage limits
+   - No explicit quota management in the application
 
 ---
 
 ## API Reference
 
-### Frontend Cache API (src/lib/store.ts)
+### Frontend Cache API (`src/lib/cache.ts`)
 
 #### PNG Cache Functions
 
 ```typescript
-// Get PNG from cache hierarchy
-async function getPng(tsId: string, zIndex: number, bin?: number, quality?: number): Promise<Blob | null>
+// Get PNG from cache hierarchy (memory → IndexedDB → backend)
+async function getPng(tsId: string, zIndex: number, mrcPath: string, bin?: number): Promise<{ blob: Blob; pngMtime: number } | null>
 
-// Store PNG in cache (syncs to both memory and IndexedDB)
-async function putPng(tsId: string, zIndex: number, data: Blob, bin?: number, quality?: number): Promise<void>
+// Store PNG in cache (memory + IndexedDB)
+async function putPng(tsId: string, zIndex: number, data: Blob, mrcPath: string, pngMtime: number, bin?: number): Promise<void>
 
-// Store in memory with LRU eviction (syncs to IndexedDB)
-async function putPngToMemory(key: string, data: Blob): Promise<void>
-
-// Clear all PNG cache (both memory and IndexedDB)
+// Clear all PNG cache (memory + IndexedDB)
 async function clearCache(): Promise<void>
 
-// Clear PNG cache for specific tilt series (user action, deletes from both tiers)
-async function clearCacheForTs(tsId: string): Promise<void>
+// Validate cached PNGs against backend mtimes
+async function validateTsCache(ts: TiltSeries, bin?: number): Promise<void>
 
-// Cache all PNGs
-async function cacheAll(): Promise<{ success: number; failed: number; total: number }>
+// Cache all selected frames of a single tilt series
+async function cacheMdoc(ts: TiltSeries, onProgress?: (current: number, total: number) => void): Promise<{ success: number; failed: number }>
 
-// Refresh cache from backend (clears and re-fetches)
-async function refreshCache(): Promise<{ success: number; failed: number; total: number }>
-
-// Delete all cached PNGs
-async function deleteCache(): Promise<void>
+// Cache all tilt series sequentially
+async function cacheAllMdocs(tiltSeries: TiltSeries[], onProgress?: (progress) => void): Promise<{ success: number; failed: number; total: number }>
 ```
 
-#### IndexedDB Helper Functions
+#### IndexedDB
 
 ```typescript
 // Initialize IndexedDB database
 async function initDB(): Promise<IDBDatabase>
-
-// Check and enforce IndexedDB quota (evicts if needed)
-async function checkIndexedDbQuota(newItemSize: number): Promise<void>
-
-// Update IndexedDB size tracking
-async function updateIndexedDbSize(): Promise<void>
-
-// Store in IndexedDB with quota checking
-async function putToIndexedDB(key: string, data: Blob): Promise<void>
-
-// Delete from IndexedDB (user action or quota eviction)
-async function deleteFromIndexedDB(key: string, reason: 'user' | 'quota'): Promise<void>
 ```
 
-#### Selection State Functions
-
-```typescript
-// Get frame selection state
-function getFrameSelection(mdocPath: string, zIndex: number, original: boolean, selectionsState?: Map): boolean
-
-// Set frame selection
-function setFrameSelection(mdocPath: string, zIndex: number, selected: boolean): void
-
-// Batch set selections
-function setBatchSelection(mdocPath: string, selectionsMap: Map<number, boolean>): void
-
-// Clear tilt series selections
-function clearTsSelections(mdocPath: string): void
-
-// Load persisted selections
-function loadPersistedSelections(): void
-```
-
-#### Project Functions
+### Frontend API Client (`src/lib/api.ts`)
 
 ```typescript
 // Scan project directory
 async function scanProject(config: ScanConfig): Promise<TiltSeries[]>
 
-// Fetch PNG from backend
-async function fetchPng(tsId: string, zIndex: number, bin?: number, quality?: number): Promise<Blob>
+// List all tilt series
+async function listTiltSeries(): Promise<TiltSeries[]>
 
-// Batch save selections
-async function batchSave(mdocPath: string, selectionsMap: Map<number, boolean>): Promise<TiltSeries | null>
+// Get specific tilt series
+async function getTiltSeries(tsId: string): Promise<TiltSeries | null>
 
-// Load persisted tilt series
-function loadPersistedTiltSeries(): void
+// Fetch PNG preview from backend
+async function fetchPng(tsId: string, zIndex: number, bin?: number): Promise<{ blob: Blob; pngMtime: number }>
+
+// Fetch PNG disk mtimes for a tilt series
+async function fetchMtimes(tsId: string, bin?: number): Promise<Map<number, number>>
+
+// Save all selections (batch)
+async function saveAll(selectionsState: SelectionState, deletePaths?: string[]): Promise<SaveAllResult>
+
+// Get user home directory
+async function fetchUserHome(): Promise<string>
+
+// List directory contents
+async function listDirectory(path: string): Promise<{ name: string; type: "dir" | "file" }[]>
+
+// Save/load/list/delete scan configurations
+async function saveConfig(config: ScanConfig): Promise<void>
+async function loadConfig(filename: string): Promise<ScanConfig>
+async function listConfigs(): Promise<string[]>
 ```
 
-### Backend Cache API (backend/src/cache/lru.rs)
+### Backend Cache API (`backend/src/cache/lru.rs`)
 
 ```rust
-// Get from LRU cache
-pub fn get(ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> Option<Vec<u8>>
+// Get from LRU cache (updates last_accessed timestamp)
+pub fn get(&mut self, ts_id: &str, frame_id: i32, bin: i32) -> Option<&PngCacheEntry>
 
-// Put in LRU cache
-pub fn put(ts_id: &str, frame_id: i32, bin: i32, quality: i32, data: Vec<u8>)
+// Put in LRU cache (evicts oldest entries if over capacity)
+pub fn put(&mut self, ts_id: &str, frame_id: i32, bin: i32, data: Vec<u8>, mtime: Option<u64>)
 
 // Clear LRU cache
-pub fn clear()
+pub fn clear(&mut self)
 ```
 
-### Backend State API (backend/src/state/project_state.rs)
+### Backend State API (`backend/src/state/project_state.rs`)
 
 ```rust
 // Set project configuration (also clears all tilt series)
@@ -589,10 +523,10 @@ pub async fn list_tilt_series() -> Vec<TiltSeries>
 pub async fn remove_tilt_series_by_mdoc_path(mdoc_path: &str)
 
 // Update frames after save (removes deselected frames, recalculates angle range)
-pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> bool
+pub async fn update_tilt_series_frames(mdoc_path: &str, selections: &HashMap<i32, bool>) -> Result<(), String>
 ```
 
-### Backend MDOC API (backend/src/routes/mdoc.rs)
+### Backend MDOC API (`backend/src/routes/mdoc.rs`)
 
 ```
 # Scan project
@@ -611,7 +545,7 @@ Response: TiltSeries
 # Save all selections
 POST /api/mdoc/save-all
 Request: { selections: Record<mdocPath, Record<zIndex, bool>> }
-Response: { success, saved, failed, deleted, message }
+Response: { success, saved, failed, deleted, backups, message }
 
 # Delete all
 POST /api/mdoc/delete-all
@@ -620,70 +554,139 @@ Response: { success, deleted, failed, message }
 
 # Batch save single mdoc
 POST /api/mdoc/batch-save
-Request: BatchSaveRequest
-Response: BatchSaveResponse
+Request: { mdoc_path, selections: Record<zIndex, bool> }
+Response: { success, message, backup_path?, updated_tilt_series? }
 
 # Backup and delete
 POST /api/mdoc/backup-delete
-Request: BackupDeleteRequest
-Response: BackupDeleteResponse
+Request: { mdoc_path }
+Response: { success, message, backup_path? }
 ```
 
-### Backend PNG API (backend/src/routes/preview.rs)
+### Backend PNG API (`backend/src/routes/preview.rs`)
 
 ```
 # Get PNG preview
 GET /api/preview/{ts_id}/{frame_id}
-Query: bin (1,2,4,8), quality (1-100)
-Response: image/png
+Query: bin (1,2,4,8)
+Response: image/png (with x-png-mtime header)
+
+# Get frame disk mtimes
+GET /api/preview/{ts_id}/frame-mtimes
+Query: bin (1,2,4,8)
+Response: { mtimes: Record<zIndex, mtime> }
 
 # Get capabilities
 GET /api/preview/capabilities
-Response: { supported_bins, default_bin, quality_range, default_quality, format }
+Response: { supported_bins, default_bin, format }
 ```
 
 ---
 
 ## Data Structures
 
-### Type Definitions (src/lib/types.ts)
+### Type Definitions (`src/lib/types.ts`)
 
 ```typescript
 // Frame in mdoc
 interface Frame {
-  zIndex: number
-  angle: number
-  mrcPath: string
-  selected: boolean
+  zIndex: number;
+  angle: number;
+  mrcPath: string;
+  selected: boolean;
+  mrcMtime: number;
 }
 
 // Tilt Series from mdoc file
 interface TiltSeries {
-  id: string
-  mdocPath: string
-  frames: Frame[]
-  angleRange: [number, number]
+  id: string;
+  mdocPath: string;
+  frames: Frame[];
+  angleRange: [number, number];
 }
 
 // Scan configuration
 interface ScanConfig {
-  mdoc_dir: string
-  image_dir: string
-  png_dir: string
-  mdoc_prefix_cut?: number
-  mdoc_suffix_cut?: number
-  image_prefix_cut?: number
-  image_suffix_cut?: number
+  mdoc_dir: string;
+  image_dir: string;
+  png_dir: string;
+  mdoc_prefix_cut?: number;
+  mdoc_suffix_cut?: number;
+  image_prefix_cut?: number;
+  image_suffix_cut?: number;
 }
 
 // Selection state
-type SelectionState = Map<string, Map<number, boolean>>
+type SelectionState = Map<string, Map<number, boolean>>;
 
 // PNG cache item
 interface PngCacheItem {
-  data: Blob
-  timestamp: number
-  size: number
+  data: Blob;
+  timestamp: number;
+  size: number;
+  mrcPath: string;
+  pngMtime: number;
+}
+
+// Save all result
+interface SaveAllResult {
+  success: boolean;
+  saved: string[];
+  failed: string[];
+  deleted: string[];
+  message: string;
+}
+
+// Cache progress
+interface CacheProgress {
+  cached: number;
+  total: number;
+  currentTs: string;
+  currentFrame: number;
+}
+```
+
+### Backend Types (`backend/src/models/types.rs`)
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Frame {
+    pub z_index: i32,
+    pub angle: f64,
+    pub mrc_path: String,
+    pub selected: bool,
+    pub mrc_mtime: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TiltSeries {
+    pub id: String,
+    pub mdoc_path: String,
+    pub frames: Vec<Frame>,
+    pub angle_range: (f64, f64),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanConfig {
+    pub mdoc_dir: String,
+    pub image_dir: String,
+    pub png_dir: String,
+    pub mdoc_prefix_cut: i32,
+    pub mdoc_suffix_cut: i32,
+    pub image_prefix_cut: i32,
+    pub image_suffix_cut: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveAllResponse {
+    pub success: bool,
+    pub saved: Vec<String>,
+    pub failed: Vec<String>,
+    pub deleted: Vec<String>,
+    pub message: String,
+    pub backups: Vec<String>,
 }
 ```
 
@@ -693,29 +696,25 @@ interface PngCacheItem {
 
 ### When Using PNG Cache
 
-1. **Use `getPng()` for all PNG access** - It handles the cache hierarchy automatically
-2. **Let LRU manage memory** - Don't manually clear unless necessary; items stay in IndexedDB
-3. **Use `cacheAll()` for offline preparation** - Pre-cache before going offline
-4. **Use `refreshCache()` after external changes** - Sync after regenerating PNGs with external tools
-5. **Use `deleteCache()` to free space** - Clears both memory and IndexedDB caches
-6. **Understand cache independence** - Memory eviction doesn't delete from IndexedDB; IndexedDB has its own quota
-7. **Monitor cache sizes** - Check the UI badge for memory and IndexedDB usage
-8. **Plan for IndexedDB quota** - 10GB limit with automatic eviction; plan usage accordingly
+1. **Use `getPng()` for all PNG access** — It handles the cache hierarchy automatically
+2. **Let LRU manage memory** — Don't manually clear unless necessary; items stay in IndexedDB
+3. **Use `cacheAllMdocs()` for offline preparation** — Pre-cache before going offline
+4. **Use `validateTsCache()` after scan** — Ensures cached PNGs are still fresh
+5. **Use `clearCache()` to free space** — Clears both memory and IndexedDB caches
 
 ### When Using MDOC Cache
 
-1. **Let selections persist automatically** - Debounced writes optimize performance
-2. **Clear selections after save** - Prevents stale data
-3. **Use overrides for unsaved changes** - Keeps original data intact
-4. **Re-parse after save** - Ensures consistency between file and state
+1. **Let selections persist automatically** — Debounced writes optimize performance
+2. **Clear selections after save** — Prevents stale data
+3. **Use overrides for unsaved changes** — Keeps original data intact
+4. **Re-scan after external changes** — Ensures consistency between file and state
 
 ### State Management
 
-1. **Use derived stores for computed values** - Automatic updates
-2. **Use $state for component-local state** - Reactive and efficient
-3. **Use $effect for side effects** - Proper cleanup and reactivity
-4. **Persist critical state to localStorage** - Survives page refreshes
-5. **Clear stale state appropriately** - Prevents memory leaks
+1. **Use `useCallback` for stable function references** — Prevents unnecessary re-renders
+2. **Use `useRef` for initial-expansion tracking** — Prevents re-expansion bugs
+3. **Persist critical state to localStorage** — Survives page refreshes
+4. **Clear stale state appropriately** — Prevents memory leaks
 
 ---
 
@@ -724,29 +723,21 @@ interface PngCacheItem {
 ### PNG Cache Issues
 
 **Problem:** PNGs not loading
-- Check: IndexedDB is accessible
 - Check: Backend API is running
-- Check: Cache key format matches
+- Check: Frame has a valid `mrcPath` (starts with `/`)
 - Solution: Clear cache and retry
 
 **Problem:** Memory usage too high
-- Check: Cache size in UI badge
-- Check: LRU eviction is working
-- Solution: Reduce MAX_MEMORY_CACHE or clear cache
+- Check: LRU eviction is working (2GB limit)
+- Solution: Reduce `MAX_MEMORY_CACHE` or clear cache
 
-**Problem:** IndexedDB quota exceeded
-- Check: IndexedDB size in UI badge
-- Check: Quota eviction is working
-- Solution: Use `deleteCache()` to free space, or let quota eviction handle it
+**Problem:** Stale PNGs after file changes
+- Check: `validateTsCache()` was called after scan
+- Solution: Re-scan project or manually clear cache
 
-**Problem:** Items disappearing from IndexedDB
-- Check: If disappearing without user action, check quota eviction logs
-- Check: IndexedDB size is approaching 10GB limit
-- Solution: Monitor quota usage, use `deleteCache()` if needed
-
-**Problem:** Stale PNGs after regeneration
-- Check: External tool regenerated files
-- Solution: Use `refreshCache()` to sync (clears IndexedDB and re-fetches)
+**Problem:** IndexedDB entries not found after upgrade
+- Check: DB version was bumped (purges old format entries)
+- Solution: Re-cache PNGs
 
 ### MDOC Cache Issues
 
@@ -757,7 +748,7 @@ interface PngCacheItem {
 
 **Problem:** Unsaved changes lost
 - Check: Save operation completed successfully
-- Check: Backup file was created
+- Check: Backup file was created (`.{timestamp}.bak`)
 - Solution: Restore from backup
 
 **Problem:** TiltSeries not loading
@@ -768,14 +759,9 @@ interface PngCacheItem {
 ### State Issues
 
 **Problem:** UI not updating
-- Check: Using $state or stores correctly
-- Check: Derived stores have correct dependencies
-- Solution: Verify reactivity chain
-
-**Problem:** Memory leaks
-- Check: Component cleanup
-- Check: Store subscriptions
-- Solution: Unsubscribe from stores in cleanup
+- Check: Using state/context correctly
+- Check: Dependencies in `useEffect`/`useCallback` are correct
+- Solution: Verify React reactivity chain
 
 ---
 
@@ -787,8 +773,8 @@ interface PngCacheItem {
    - Fallback to IndexedDB for large datasets
 
 2. **Cache Versioning**
-   - Add version metadata to cache
-   - Implement migration strategies
+   - Add version metadata to cache entries
+   - Implement granular migration strategies
    - Automatic cache invalidation on version changes
 
 3. **Memory Management**
@@ -802,15 +788,13 @@ interface PngCacheItem {
    - Performance dashboard for developers
 
 5. **IndexedDB Optimization**
-   - Implement lazy quota checking (batch operations)
+   - Implement explicit quota management
    - Add manual quota management controls
    - Implement cache warming strategies
-   - Add cache compression for large PNGs
 
 6. **Advanced Cache Strategies**
    - Implement predictive caching based on usage patterns
    - Add cache priority levels (critical vs optional)
-   - Implement cache preloading for likely-to-be-accessed items
    - Add cache sharing across browser tabs
 
 ---
@@ -820,6 +804,7 @@ interface PngCacheItem {
 - **Frontend Store:** `src/lib/store.tsx`
 - **Frontend Types:** `src/lib/types.ts`
 - **Frontend Cache:** `src/lib/cache.ts`
+- **Frontend API Client:** `src/lib/api.ts`
 - **Frontend Components:** `src/components/gallery/`
 - **Backend Cache:** `backend/src/cache/lru.rs`
 - **Backend State:** `backend/src/state/project_state.rs`
@@ -827,3 +812,4 @@ interface PngCacheItem {
 - **Backend PNG API:** `backend/src/routes/preview.rs`
 - **MDOC Parser:** `backend/src/mdoc/parser.rs`
 - **MDOC Writer:** `backend/src/mdoc/writer.rs`
+- **Backend Types:** `backend/src/models/types.rs`

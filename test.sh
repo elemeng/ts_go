@@ -17,7 +17,7 @@ error() { echo -e "${RED}[TEST]${NC} $*"; }
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 START_PORT="${1:-8088}"
-TEST_DIR="/tmp/ts-go-test-$$"
+TEST_DIR="/tmp/TomoCurator-test-$$"
 
 # Find a free port — but if the first port is taken by our own binary, kill it
 info "Checking port $START_PORT..."
@@ -50,7 +50,7 @@ cd "$PROJECT_ROOT"
 ./build-release.sh 2>&1 | sed 's/^/  /'
 
 # Find the tarball
-TARBALL=$(ls -t ts-go-*.tar.gz 2>/dev/null | head -1)
+TARBALL=$(ls -t TomoCurator-*.tar.gz 2>/dev/null | head -1)
 if [ -z "$TARBALL" ]; then
     error "No tarball found after build"
     exit 1
@@ -76,8 +76,24 @@ export PORT
 ./run.sh &
 SERVER_PID=$!
 
-# Wait for the server to be ready
-sleep 2
+# Cleanup handler for interrupt
+cleanup() {
+    local exit_code=$?
+    info "Cleaning up..."
+    [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null && wait "$SERVER_PID" 2>/dev/null || true
+    exit $exit_code
+}
+trap cleanup SIGINT SIGTERM EXIT
+
+# Wait for the server to be ready (poll up to 10s by port)
+info "  → Waiting for server to be ready on port $PORT..."
+for i in $(seq 1 10); do
+    if kill -0 "$SERVER_PID" 2>/dev/null && ss -tlnp 2>/dev/null | grep -q ":${PORT}[ :]"; then
+        info "  → Server ready after ${i}s"
+        break
+    fi
+    sleep 1
+done
 
 # Check if it's running
 if ! kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -85,8 +101,14 @@ if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     exit 1
 fi
 
-# Try to detect the actual port
-ACTUAL_PORT=$(ss -tlnp 2>/dev/null | grep "$SERVER_PID" | awk '{print $4}' | awk -F: '{print $NF}' | head -1)
+# Detect the actual port (the backend may have picked a different one)
+ACTUAL_PORT=$(
+    ss -tlnp 2>/dev/null \
+        | grep "ts-sv-backend" \
+        | awk '{print $4}' \
+        | awk -F: '{print $NF}' \
+        | head -1
+)
 ACTUAL_PORT="${ACTUAL_PORT:-$PORT}"
 
 info "  → Server PID: $SERVER_PID"

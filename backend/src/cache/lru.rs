@@ -29,13 +29,12 @@ impl PngCache {
         }
     }
 
-    fn key(&self, ts_id: &str, frame_id: i32, bin: i32, quality: i32) -> u64 {
+    fn key(&self, ts_id: &str, frame_id: i32, bin: i32) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         ts_id.hash(&mut hasher);
         frame_id.hash(&mut hasher);
         bin.hash(&mut hasher);
-        quality.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -51,9 +50,8 @@ impl PngCache {
         ts_id: &str,
         frame_id: i32,
         bin: i32,
-        quality: i32,
     ) -> Option<&PngCacheEntry> {
-        let key = self.key(ts_id, frame_id, bin, quality);
+        let key = self.key(ts_id, frame_id, bin);
         let entry = self.cache.get_mut(&key)?;
         entry.last_accessed = Self::now();
         Some(&*entry)
@@ -64,11 +62,10 @@ impl PngCache {
         ts_id: &str,
         frame_id: i32,
         bin: i32,
-        quality: i32,
         data: Vec<u8>,
         mtime: Option<u64>,
     ) {
-        let key = self.key(ts_id, frame_id, bin, quality);
+        let key = self.key(ts_id, frame_id, bin);
         let size = data.len();
 
         // Remove if exists
@@ -104,7 +101,7 @@ impl PngCache {
         self.current_size += size;
     }
 
-    #[allow(dead_code)] // We'll keep it for future use!
+    #[allow(dead_code)] // kept for future use (e.g. cache invalidation on config change)
     pub fn clear(&mut self) {
         self.cache.clear();
         self.current_size = 0;

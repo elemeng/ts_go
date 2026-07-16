@@ -23,7 +23,9 @@ function loadPersistedConfig(): Partial<ScanConfig> {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return JSON.parse(saved);
-  } catch {}
+  } catch (e) {
+    console.warn("Failed to load persisted scan config:", e);
+  }
   return {};
 }
 
@@ -31,7 +33,9 @@ function savePersistedConfig(config: ScanConfig) {
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-  } catch {}
+  } catch (e) {
+    console.warn("Failed to persist scan config:", e);
+  }
 }
 
 interface ScanDialogProps {
@@ -85,7 +89,9 @@ export function ScanDialog({ open, onOpenChange, onScan }: ScanDialogProps) {
               png_dir: prev.png_dir || home,
             }));
           })
-          .catch(() => {});
+          .catch((e) => {
+            console.warn("Failed to fetch user home directory:", e);
+          });
       }
     }
   }, [open]);

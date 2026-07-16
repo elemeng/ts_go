@@ -128,7 +128,7 @@ async function main() {
       console.log("[e2e] ✅ Position_1_4 appeared");
     } catch {
       // Take screenshot for debugging
-      await page.screenshot({ path: "/tmp/ts-go-e2e-scan-fail.png", fullPage: true });
+      await page.screenshot({ path: "/tmp/TomoCurator-e2e-scan-fail.png", fullPage: true });
       const text = await page.textContent("body");
       console.log(`[e2e] Page body text: ${text?.substring(0, 500)}`);
       throw new Error("Position_1_4 did not appear after scan");
@@ -167,7 +167,7 @@ async function main() {
 
     // Assertions
     if (realImages < 12) {
-      await page.screenshot({ path: "/tmp/ts-go-e2e-too-few-pngs.png", fullPage: true });
+      await page.screenshot({ path: "/tmp/TomoCurator-e2e-too-few-pngs.png", fullPage: true });
       throw new Error(
         `Expected at least 12 real PNGs from MRC files, but only ${realImages} found`
       );

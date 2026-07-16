@@ -85,7 +85,7 @@ async fn get_preview(
                 format!("cache lock error: {e}"),
             )
         })?;
-        if let Some(entry) = cache.get(&ts_id, frame_id, bin, 90) {
+        if let Some(entry) = cache.get(&ts_id, frame_id, bin) {
             return Ok(build_png_response(entry.data.clone(), entry.mtime));
         }
     }
@@ -107,7 +107,7 @@ async fn get_preview(
                     format!("cache lock error: {e}"),
                 )
             })?;
-            cache.put(&ts_id, frame_id, bin, 90, data.clone(), mtime);
+            cache.put(&ts_id, frame_id, bin, data.clone(), mtime);
             return Ok(build_png_response(data, mtime));
         }
     }
@@ -274,8 +274,7 @@ fn generate_png(
     png_dir: Option<&str>,
 ) -> Result<(Vec<u8>, Option<u64>), String> {
     // Read image as f32
-    let img_f32 = read_image(mrc_path)
-        .ok_or_else(|| format!("failed to read image: {mrc_path}"))?;
+    let img_f32 = read_image(mrc_path)?;
 
     // Bin if needed
     let binned = if bin > 1 {
@@ -309,7 +308,7 @@ fn generate_png(
     let mut cache = PNG_CACHE
         .lock()
         .map_err(|e| format!("Cache lock error: {e}"))?;
-    cache.put(&ts_id, frame_id, bin, 90, data.clone(), disk_mtime);
+    cache.put(&ts_id, frame_id, bin, data.clone(), disk_mtime);
 
     Ok((data, disk_mtime))
 }

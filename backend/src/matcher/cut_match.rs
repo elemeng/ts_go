@@ -8,14 +8,18 @@ use std::path::Path;
 /// `Position_1_13_006_-21.00_20260527_144344_EER.mrc`.
 pub struct ImageMatcher {
     image_dir: String,
+    image_prefix_cut: usize,
+    image_suffix_cut: usize,
     /// List of (filename_stem, full_path) for all image files found
     files: Vec<(String, String)>,
 }
 
 impl ImageMatcher {
-    pub fn new(image_dir: &str, _image_prefix_cut: usize, _image_suffix_cut: usize) -> Self {
+    pub fn new(image_dir: &str, image_prefix_cut: usize, image_suffix_cut: usize) -> Self {
         Self {
             image_dir: image_dir.to_string(),
+            image_prefix_cut,
+            image_suffix_cut,
             files: Vec::new(),
         }
     }
@@ -38,7 +42,15 @@ impl ImageMatcher {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 if !stem.is_empty() {
-                    self.files.push((stem, path));
+                    let stem: String = stem.chars().skip(self.image_prefix_cut).collect();
+                    let stem = if stem.len() >= self.image_suffix_cut {
+                        stem.chars().take(stem.len() - self.image_suffix_cut).collect()
+                    } else {
+                        stem
+                    };
+                    if !stem.is_empty() {
+                        self.files.push((stem, path));
+                    }
                 }
             }
         }

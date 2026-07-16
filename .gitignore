@@ -43,6 +43,6 @@ Thumbs.db
 # --- Build output ---
 /build
 /dist
-ts-go-release/
-ts-go-*.tar.gz
+TomoCurator-release/
+TomoCurator-*.tar.gz
 node_modules/
