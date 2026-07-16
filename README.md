@@ -3,6 +3,8 @@
 A web application for **Cryo-ET tilt series filtering, inspection, and visualization**.
 Point your browser at it, scan a project directory, and start curating.
 
+![CryoET Tilt Series Curator screenshot](ts_go.png)
+
 ---
 
 ## Quick Start (for end users)
